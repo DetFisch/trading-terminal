@@ -1,5 +1,5 @@
 name: IB Gateway
-version: "0.1.0"
+version: "0.1.1"
 slug: ib_gateway
 description: Interactive Brokers Gateway (headless, auto-login) for the Trading Terminal add-on
 arch:

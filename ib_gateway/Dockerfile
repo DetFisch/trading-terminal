@@ -1,7 +1,8 @@
 # Wraps https://github.com/gnzsnz/ib-gateway-docker so its settings come from the add-on's
 # Configuration tab (/data/options.json) instead of docker environment variables.
-ARG BUILD_FROM=ghcr.io/gnzsnz/ib-gateway:stable
-FROM ${BUILD_FROM}
+# Base image fixed here on purpose: Home Assistant passes its own Alpine base as BUILD_FROM,
+# so that argument is deliberately not used.
+FROM ghcr.io/gnzsnz/ib-gateway:stable
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*
