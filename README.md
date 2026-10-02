@@ -76,8 +76,9 @@ never in this repository (`.env` is git-ignored).
    **Configuration** tab paste your keys, Save, **Start**, and turn on **Show in sidebar**.
 3. Optional, for Interactive Brokers: install **IB Gateway**, enter your **paper** username and
    password, Start it, and approve the login on your phone if IBKR asks. Then in Trading
-   Terminal's Configuration set `ibkr_enabled` on (host `local-ib-gateway`, port `4004` for
-   paper or `4003` for live) and restart Trading Terminal.
+   Terminal's Configuration set `ibkr_enabled` on, `ibkr_host` to the **Hostname** shown on the IB Gateway
+   add-on's Info tab (`e8950327-ib-gateway` when installed from this repository), and `ibkr_port` to `4004`
+   for paper or `4003` for live, and restart Trading Terminal.
 4. Stop any other copy of the app while the Home Assistant one runs: the free Alpaca plan
    allows only one live price stream.
 
