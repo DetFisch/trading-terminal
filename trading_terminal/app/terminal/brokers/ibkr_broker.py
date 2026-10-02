@@ -15,6 +15,27 @@ from .base import Broker, OrderRequest
 ACTIVE = {"PendingSubmit", "ApiPending", "PreSubmitted", "Submitted"}
 
 
+def _last_message(trade) -> str:
+    """Latest note IBKR attached to an order (warnings, rejection reasons)."""
+    for entry in reversed(trade.log or []):
+        if entry.message:
+            return entry.message
+    return ""
+
+
+def _price(ticker) -> float | None:
+    """Best available price: bid/ask midpoint, else last trade, else previous close."""
+    import math
+
+    ok = lambda v: v is not None and not math.isnan(v) and v > 0
+    if ok(ticker.bid) and ok(ticker.ask):
+        return (ticker.bid + ticker.ask) / 2
+    for v in (ticker.last, ticker.close):
+        if ok(v):
+            return v
+    return None
+
+
 class IBKRBroker(Broker):
     name = "Interactive Brokers"
 
@@ -83,12 +104,72 @@ class IBKRBroker(Broker):
                     "type": t.order.orderType.lower(),
                     "limit_price": t.order.lmtPrice if t.order.orderType == "LMT" else None,
                     "status": t.orderStatus.status,
-                    "submitted": None,
+                    "submitted": t.log[0].time if t.log else None,
+                    "message": _last_message(t),
                 }
                 for t in self.ib.trades()
             ]
 
         return self._run(go())
+
+    def activity(self):
+        """Executions IBKR still reports (typically the last day or so). Dividends aren't in the API feed."""
+        import pandas as pd
+
+        async def go():
+            await self._ensure()
+            fills = await self.ib.reqExecutionsAsync()
+            return [{"symbol": f.contract.symbol, "side": "buy" if f.execution.side == "BOT" else "sell",
+                     "qty": float(f.execution.shares), "price": float(f.execution.price),
+                     "time": pd.Timestamp(f.execution.time)}
+                    for f in fills if f.contract.secType == "STK"]
+
+        fills = pd.DataFrame(self._run(go()), columns=["symbol", "side", "qty", "price", "time"])
+        return fills, pd.DataFrame(columns=["symbol", "amount", "date"])
+
+    def forecast_markets(self, products: list[str], expiries: int = 2, max_contracts: int = 40) -> list[dict]:
+        """ForecastEx event contracts (exchange FORECASTX). IBKR models them as options paying $1:
+        a call is "Yes", a put "No", and the strike is the outcome's threshold. Returns events in the
+        same shape as terminal.predictions, with the Yes price (0-1) as the market's probability."""
+        from ib_async import Contract
+
+        async def go():
+            await self._ensure()
+            self.ib.reqMarketDataType(4)  # live if subscribed, otherwise delayed / last available
+            events, problems = [], {}
+            for product in products:
+                try:
+                    details = await self.ib.reqContractDetailsAsync(
+                        Contract(secType="OPT", symbol=product, exchange="FORECASTX", currency="USD", right="C"))
+                except Exception as e:
+                    problems[product] = str(e)
+                    continue
+                if not details:
+                    problems[product] = "IBKR has no ForecastEx contracts under this code"
+                    continue
+                by_expiry: dict[str, list] = {}
+                for d in details:
+                    by_expiry.setdefault(d.contract.lastTradeDateOrContractMonth, []).append(d)
+                for expiry in sorted(by_expiry)[:expiries]:
+                    group = sorted(by_expiry[expiry], key=lambda d: d.contract.strike)[:max_contracts]
+                    tickers = await self.ib.reqTickersAsync(*[d.contract for d in group])
+                    outcomes = []
+                    for d, t in zip(group, tickers):
+                        p = _price(t)
+                        if p is not None:
+                            outcomes.append((f"{d.contract.strike:g}", p))
+                    if outcomes:
+                        name = group[0].longName or product
+                        when = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:8]}" if len(expiry) >= 8 else expiry
+                        events.append({
+                            "source": "IBKR ForecastEx", "title": f"{name} ({product})", "subtitle": f"Resolves {when}",
+                            "category": "forecastex " + product.lower(), "volume": 0,
+                            "outcomes": sorted(outcomes, key=lambda o: -o[1]),
+                            "url": "https://forecasttrader.interactivebrokers.com",
+                        })
+            return events, problems
+
+        return self._run(go(), timeout=60)
 
     def submit_order(self, req: OrderRequest) -> str:
         if req.is_option or req.take_profit or req.stop_loss:
@@ -107,7 +188,16 @@ class IBKRBroker(Broker):
                 order = StopOrder(action, req.qty, req.stop_price, tif=tif)
             else:
                 order = MarketOrder(action, req.qty, tif=tif)
-            return str(self.ib.placeOrder(contract, order).order.orderId)
+            trade = self.ib.placeOrder(contract, order)
+            # Give IBKR a few seconds to accept or reject it, so problems show up here and not as a
+            # status that never moves.
+            for _ in range(25):
+                await asyncio.sleep(0.2)
+                if trade.orderStatus.status not in ("PendingSubmit", "ApiPending"):
+                    break
+            if trade.orderStatus.status in ("Cancelled", "ApiCancelled", "Inactive"):
+                raise ValueError(f"IBKR did not accept the order: {_last_message(trade) or trade.orderStatus.status}")
+            return str(trade.order.orderId)
 
         return self._run(go())
 

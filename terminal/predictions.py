@@ -9,6 +9,8 @@ import json
 
 import requests
 
+from . import config
+
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
 POLY = "https://gamma-api.polymarket.com"
 HEADERS = {"User-Agent": "Mozilla/5.0 trading-terminal"}
@@ -19,6 +21,22 @@ TOPICS = {
     "Economy & jobs": ["recession", "gdp", "unemployment", "jobs", "payroll", "jobless"],
     "Markets": ["s&p", "nasdaq", "dow ", "stock market", "bitcoin", "oil", "gold", "treasury", "10-year"],
 }
+
+
+FORECAST_PATH = config.DATA_DIR / "forecastex.json"
+DEFAULT_FORECAST_PRODUCTS = ["FF"]  # FF = US Fed Funds target rate; more codes are listed in IBKR ForecastTrader
+
+
+def forecast_products() -> list[str]:
+    try:
+        return json.loads(FORECAST_PATH.read_text()) or DEFAULT_FORECAST_PRODUCTS
+    except (FileNotFoundError, json.JSONDecodeError):
+        return DEFAULT_FORECAST_PRODUCTS
+
+
+def set_forecast_products(codes: list[str]) -> None:
+    FORECAST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FORECAST_PATH.write_text(json.dumps([c.strip().upper() for c in codes if c.strip()]))
 
 
 def _get(url: str, **params):

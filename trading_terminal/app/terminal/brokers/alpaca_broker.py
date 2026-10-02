@@ -23,6 +23,40 @@ class AlpacaBroker(Broker):
 
     def __init__(self, api_key: str, secret_key: str, paper: bool = True):
         self.client = TradingClient(api_key, secret_key, paper=paper)
+        self._auth = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+        self._base = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
+
+    def _activities(self, kind: str, pages: int = 20) -> list[dict]:
+        """Account activity (FILL, DIV, ...) newest first; alpaca-py has no wrapper for this endpoint."""
+        import requests
+
+        out, token = [], None
+        for _ in range(pages):
+            params = {"activity_types": kind, "page_size": 100, "direction": "desc"}
+            if token:
+                params["page_token"] = token
+            r = requests.get(f"{self._base}/v2/account/activities", params=params, headers=self._auth, timeout=20)
+            r.raise_for_status()
+            page = r.json()
+            out += page
+            if len(page) < 100:
+                break
+            token = page[-1]["id"]
+        return out
+
+    def activity(self):
+        import pandas as pd
+
+        fills = pd.DataFrame([
+            {"symbol": a["symbol"], "side": "buy" if a["side"] == "buy" else "sell", "qty": float(a["qty"]),
+             "price": float(a["price"]), "time": pd.Timestamp(a["transaction_time"])}
+            for a in self._activities("FILL")
+        ], columns=["symbol", "side", "qty", "price", "time"])
+        divs = pd.DataFrame([
+            {"symbol": a.get("symbol"), "amount": float(a.get("net_amount") or 0), "date": pd.Timestamp(a["date"])}
+            for a in self._activities("DIV")
+        ], columns=["symbol", "amount", "date"])
+        return fills, divs
 
     def account(self) -> dict:
         a = self.client.get_account()

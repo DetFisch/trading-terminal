@@ -14,6 +14,9 @@ for key, value in options.items():
     if value not in (None, ""):
         os.environ[key.upper()] = str(value).lower() if isinstance(value, bool) else str(value)
 os.environ.setdefault("DATA_DIR", "/data")
+# Claude Code keeps its subscription sign-in here, so it survives add-on restarts and updates.
+os.environ.setdefault("CLAUDE_CONFIG_DIR", os.path.join(os.environ["DATA_DIR"], "claude"))
+Path(os.environ["CLAUDE_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
 # The IB Gateway add-on serves paper on 4004 and live on 4003; with no port set, match trading_mode.
 if not os.getenv("IBKR_PORT") and os.getenv("IBKR_HOST", "127.0.0.1") not in ("127.0.0.1", "localhost"):
     os.environ["IBKR_PORT"] = "4003" if os.getenv("TRADING_MODE", "paper").lower() == "live" else "4004"

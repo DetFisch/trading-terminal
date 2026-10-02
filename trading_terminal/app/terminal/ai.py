@@ -1,6 +1,7 @@
 """Research panel (Claude or Gemini). Research only: it has no tools that can place or change orders."""
 from __future__ import annotations
 
+import os
 from typing import Iterator
 
 import anthropic
@@ -25,9 +26,52 @@ _gemini_search_ok = True
 WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 5}
 
 
+def provider() -> str | None:
+    """Which AI answers: "Claude Code" (subscription sign-in), "Claude" (API key), "Gemini", or None.
+
+    AI_CHOICE=auto (default) prefers your Claude subscription, then an Anthropic API key, then Gemini.
+    """
+    from . import claude_code
+
+    choice = os.getenv("AI_CHOICE", "auto").strip().lower().replace("_", " ")
+    have = {
+        "claude code": claude_code.binary() is not None and claude_code.signed_in(),
+        "claude": bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
+        "gemini": bool(config.GEMINI_API_KEY),
+    }
+    names = {"claude code": "Claude Code", "claude": "Claude", "gemini": "Gemini"}
+    if choice in have:
+        return names[choice] if have[choice] else None
+    return next((names[k] for k in ("claude code", "claude", "gemini") if have[k]), None)
+
+
+def _transcript(messages: list) -> str:
+    """Chat history as one prompt, for the Claude Code CLI (one question per run)."""
+    def text(content) -> str:
+        if isinstance(content, str):
+            return content
+        return "".join(getattr(b, "text", "") or (b.get("text", "") if isinstance(b, dict) else "") for b in content)
+
+    *earlier, last = messages
+    if not earlier:
+        return text(last["content"])
+    history = "\n\n".join(f"{'Me' if m['role'] == 'user' else 'You'}: {text(m['content'])}" for m in earlier)
+    return f"<earlier_conversation>\n{history}\n</earlier_conversation>\n\n{text(last['content'])}"
+
+
 def stream_answer(messages: list) -> Iterator[str]:
     """Yields text as it arrives and appends the assistant turn(s) to `messages`."""
-    if config.AI_PROVIDER == "Gemini":
+    who = provider()
+    if who == "Claude Code":
+        from . import claude_code
+
+        parts = []
+        for chunk in claude_code.stream(_transcript(messages), SYSTEM):
+            parts.append(chunk)
+            yield chunk
+        messages.append({"role": "assistant", "content": "".join(parts)})
+        return
+    if who == "Gemini":
         yield from _stream_gemini(messages)
         return
     client = anthropic.Anthropic()
@@ -95,6 +139,43 @@ def _stream_gemini(messages: list) -> Iterator[str]:
         parts.append("[Gemini returned no answer.]")
         yield parts[0]
     messages.append({"role": "assistant", "content": "".join(parts)})
+
+
+def complete(prompt: str, system: str = "", max_tokens: int = 4000) -> str:
+    """One short, non-streaming answer (for background jobs like headline sentiment)."""
+    who = provider()
+    if who == "Claude Code":
+        from . import claude_code
+
+        return claude_code.ask(prompt, system or "Answer tersely.")
+    if who == "Gemini":
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        last = None
+        for model in dict.fromkeys([config.GEMINI_MODEL, *GEMINI_FALLBACKS]):
+            try:
+                r = client.models.generate_content(
+                    model=model, contents=prompt,
+                    config=types.GenerateContentConfig(system_instruction=system or None),
+                )
+                if r.text:
+                    return r.text
+            except Exception as e:  # busy model: try the next one
+                last = e
+        raise last or RuntimeError("Gemini returned no answer")
+    if who == "Claude":
+        r = anthropic.Anthropic().beta.messages.create(
+            model=MODEL, max_tokens=max_tokens, system=system or anthropic.NOT_GIVEN,
+            output_config={"effort": "low"},
+            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if r.stop_reason == "refusal":
+            raise RuntimeError("Claude declined this request")
+        return "".join(b.text for b in r.content if b.type == "text")
+    raise RuntimeError("No AI set up: sign in to Claude (Assistant > Connect Claude) or add GEMINI_API_KEY")
 
 
 def error_text(e: Exception) -> str:

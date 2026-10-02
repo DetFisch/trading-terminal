@@ -4,25 +4,28 @@ from __future__ import annotations
 import hashlib
 import html as htmllib
 import json
+import time
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from terminal import alerts, backtest, cache, config, data, ideas, predictions, sources, stream
+from terminal import (ai, alerts, backtest, cache, claude_code, config, data, gains, ideas, journal, predictions,
+                      profile, sentiment, sources, stream, watchlists)
 from terminal import indicators as ind
 from terminal.brokers import OrderRequest, connect_all
 
 # Sections and their screens. The codes also work typed into the search box ("NVDA GP").
 NAV = {
-    "Home": {"PORT": "Portfolio", "ORD": "Trade", "ALRT": "Alerts"},
+    "Home": {"PORT": "Portfolio", "ORD": "Trade", "JRNL": "Journal", "GAIN": "Gains & dividends", "ALRT": "Alerts"},
     "Stock": {"DES": "Overview", "GP": "Chart", "N": "News", "FA": "Financials", "VAL": "Valuation",
               "ANR": "Analysts", "ERN": "Earnings", "SEC": "Filings & insiders", "OMON": "Options",
               "BT": "Backtest"},
     "Market": {"MON": "Watchlist", "SPX": "S&P 500", "IDEA": "Ideas", "CAL": "Earnings calendar",
                "PRED": "Predictions", "SCR": "Screens", "ECO": "Economy"},
-    "Assistant": {"BRF": "Morning brief", "AI": "Ask AI", "HELP": "Shortcuts"},
+    "Assistant": {"BRF": "Morning brief", "AI": "Ask AI", "PLAN": "My trading plan", "CLD": "Connect Claude",
+                  "HELP": "Shortcuts"},
 }
 HOME = "PORT"  # first screen, like Robinhood's home: account value, positions, watchlist
 FUNCTIONS = {code: label for items in NAV.values() for code, label in items.items()}
@@ -234,7 +237,24 @@ def c_port_history(broker_name, period): return c_brokers()[0][broker_name].port
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def c_upcoming(syms): return sources.upcoming_earnings(list(syms))
 @st.cache_data(ttl=600, show_spinner=False)
-def c_predictions(): return predictions.all_events()
+def c_public_predictions(): return predictions.all_events()
+@st.cache_data(ttl=600, show_spinner=False)
+def c_forecastex(products):
+    b = c_brokers()[0].get("Interactive Brokers")
+    return b.forecast_markets(list(products)) if b else ([], {})
+
+
+def c_predictions():
+    """Kalshi + Polymarket (public sites) plus IBKR ForecastEx through IB Gateway when it's connected."""
+    events, errors = c_public_predictions()
+    if "Interactive Brokers" in c_brokers()[0]:
+        try:
+            fx, problems = c_forecastex(tuple(predictions.forecast_products()))
+            events = events + fx
+            errors = {**errors, **{f"ForecastEx {k}": v for k, v in problems.items()}}
+        except Exception as e:
+            errors = {**errors, "ForecastEx": str(e)}
+    return events, errors
 @st.cache_data(ttl=60, show_spinner=False)
 def c_held():
     """Stock symbols held at any connected broker (options left out)."""
@@ -465,7 +485,10 @@ def screen_des():
     left, right = st.columns([2.3, 1], gap="large")
     with left:
         if q:
-            live_header(q, company)
+            head = st.columns([5, 1.3])
+            with head[0]:
+                live_header(q, company)
+            watch_button(head[1])
         chart_box = st.container()  # filled after the range tabs below it are read
         rng = st.segmented_control("Range", list(RANGES), default="1D", key="des_range",
                                    label_visibility="collapsed") or "1D"
@@ -483,7 +506,7 @@ def screen_des():
         about_section(i)
         key_stats(i)
         st.subheader("News")
-        news_list(c_news(sym)[:6])
+        news_with_sentiment(c_news(sym)[:6])
         st.subheader("Analyst ratings")
         analyst_block(i)
     with right:
@@ -491,7 +514,41 @@ def screen_des():
             order_ticket()
         st.write("")
         st.markdown("<div class='box-title'>Watchlist</div>", unsafe_allow_html=True)
-        watchlist_panel(tuple(config.WATCHLIST), compact=True)
+        watchlist_panel(tuple(watchlists.symbols()), compact=True)
+
+
+def watch_button(where):
+    """+ Watchlist / ✓ Watching toggle for the current stock on the active list."""
+    listed = sym in watchlists.symbols()
+    label = f"✓ On {watchlists.active()}" if listed else "+ Watchlist"
+    if where.button(label, key="watch_toggle", width="stretch",
+                    help="Remove from this watchlist" if listed else f"Add {sym} to {watchlists.active()}"):
+        (watchlists.remove if listed else watchlists.add)(sym)
+        st.rerun()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def c_sentiment(symbol: str, titles: tuple) -> list:
+    return sentiment.score(symbol, list(titles))
+
+
+def news_with_sentiment(items: list[dict]):
+    """News list with a Positive / Negative / Neutral tag on each headline, scored by the AI."""
+    scores = []
+    if items and ai.provider():
+        try:
+            scores = c_sentiment(sym, tuple(n["title"] for n in items))
+        except Exception as e:
+            st.caption(f"Headline sentiment unavailable: {e}")
+    rated = [v for v in scores if v is not None]
+    if rated:
+        avg = sum(rated) / len(rated)
+        word, _ = sentiment.label(avg)
+        color = GREEN if word == "Positive" else RED if word == "Negative" else MUTED
+        st.markdown(f"<div class='muted' style='margin:-.2rem 0 .3rem'>Headline mood: <b style='color:{color}'>{word}"
+                    f"</b> ({avg:+.2f} on a −1 to +1 scale, {len(rated)} headlines, rated by {ai.provider()})</div>",
+                    unsafe_allow_html=True)
+    news_list(items, scores)
 
 
 def about_section(i: dict):
@@ -575,16 +632,21 @@ def ago(published) -> str:
     return f"{max(int(mins), 1)}m" if mins < 60 else f"{int(mins / 60)}h" if mins < 1440 else f"{int(mins / 1440)}d"
 
 
-def news_list(items: list[dict]):
+def news_list(items: list[dict], scores: list | None = None):
     if not items:
         st.caption("No recent news for this symbol.")
         return
     html = []
-    for n in items:
+    for i, n in enumerate(items):
         img = f"<img src='{n['thumb']}' loading='lazy'>" if n.get("thumb") else ""
+        tag = ""
+        if scores and i < len(scores) and scores[i] is not None:
+            word, state = sentiment.label(scores[i])
+            color = {"positive": GREEN, "negative": RED}.get(state, MUTED)
+            tag = f" <span class='chip' style='background:{color}22;color:{color}'>{word}</span>"
         html.append(
             f"<a class='news' href='{n['url']}' target='_blank'><div>"
-            f"<div class='src'>{htmllib.escape(n['publisher'] or '')} <span>{ago(n['published'])}</span></div>"
+            f"<div class='src'>{htmllib.escape(n['publisher'] or '')} <span>{ago(n['published'])}</span>{tag}</div>"
             f"<div class='t'>{htmllib.escape(n['title'])}</div></div>{img}</a>")
     st.markdown("<div>" + "".join(html) + "</div>", unsafe_allow_html=True)
 
@@ -633,19 +695,29 @@ def order_ticket(symbol_input: bool = False):
     kinds = {"market": "Market order", "limit": "Limit order", "stop": "Stop order"}
     otype = st.selectbox("Order type", ["limit", "market"] if is_opt else ["market", "limit", "stop"],
                          format_func=kinds.get)
-    qty = st.number_input("Contracts (100 shares each)" if is_opt else "Shares", min_value=0.0, value=1.0, step=1.0)
+    for k, v in (("ticket_qty", 1.0), ("ticket_bracket", False), ("ticket_sl", 0.0), ("ticket_tp", 0.0)):
+        ss.setdefault(k, v)
+    qty = st.number_input("Contracts (100 shares each)" if is_opt else "Shares", min_value=0.0, step=1.0,
+                          key="ticket_qty")
     px = None
     if otype != "market":
         px = st.number_input(f"{otype.title()} price", min_value=0.0, value=float(round(ref or 0, 2)), step=0.01)
+    if not is_opt and (px or ref):
+        size_by_risk(bname, side, px or ref)
     tp = sl = None
     with st.expander("Advanced"):
         tif = st.selectbox("Time in force", ["day"] if is_opt else ["day", "gtc"],
                            format_func={"day": "Good for day", "gtc": "Good till canceled"}.get)
-        if not is_opt and st.toggle("Attach exits (bracket)", help="Adds a take-profit and/or stop-loss order that "
-                                    "activates once this order fills. Alpaca only."):
+        if not is_opt and st.toggle("Attach exits (bracket)", key="ticket_bracket",
+                                    help="Adds a take-profit and/or stop-loss order that activates once this order "
+                                         "fills. Alpaca only."):
             c = st.columns(2)
-            tp = c[0].number_input("Take profit at", min_value=0.0, value=0.0, step=0.01, help="0 = none") or None
-            sl = c[1].number_input("Stop loss at", min_value=0.0, value=0.0, step=0.01, help="0 = none") or None
+            tp = c[0].number_input("Take profit at", min_value=0.0, step=0.01, help="0 = none", key="ticket_tp") or None
+            sl = c[1].number_input("Stop loss at", min_value=0.0, step=0.01, help="0 = none", key="ticket_sl") or None
+    with st.expander("Journal note"):
+        note = st.text_area("Why this trade?", key="ticket_note", height=80,
+                            placeholder="What's the setup, what would make you exit, what's the target?")
+        tags = st.multiselect("Tags", journal.TAGS, key="ticket_tags", placeholder="Optional")
     unit = px or ref
     est = qty * unit * (100 if is_opt else 1) if unit else None
     st.markdown(
@@ -670,6 +742,10 @@ def order_ticket(symbol_input: bool = False):
                 try:
                     oid = brokers[pb].submit_order(req)
                     st.success(f"Order sent. Id {oid}")
+                    try:
+                        journal.add(pb, oid, req, unit_px, note, tags)
+                    except Exception as e:
+                        st.warning(f"Order sent, but the journal entry wasn't saved: {e}")
                 except Exception as e:
                     st.error(f"Order rejected: {e}")
                 ss.pending_order = None
@@ -682,6 +758,54 @@ def order_ticket(symbol_input: bool = False):
                     "</div>", unsafe_allow_html=True)
     except Exception:
         pass
+
+
+def use_size(shares: int, stop: float):
+    ss.ticket_qty = float(shares)
+    ss.ticket_bracket = True
+    ss.ticket_sl = round(stop, 2)
+
+
+def size_by_risk(bname: str, side: str, entry: float):
+    """Shares to buy so that hitting the stop loses no more than the amount you choose."""
+    plan = profile.load()
+    with st.expander("Size by risk"):
+        try:
+            equity = brokers[bname].account()["equity"] or 0
+        except Exception:
+            equity = 0
+        c = st.columns(2)
+        mode = c[0].segmented_control("Risk", ["% of account", "$ amount"], default="% of account", key="size_mode",
+                                      label_visibility="collapsed") or "% of account"
+        if mode == "% of account":
+            pct = c[1].number_input("Risk %", min_value=0.1, max_value=100.0, step=0.25, key="size_pct",
+                                    value=float(plan["risk_per_trade"] or 1.0))
+            risk = equity * pct / 100
+        else:
+            risk = c[1].number_input("Risk $", min_value=1.0, step=10.0, key="size_usd", value=100.0)
+        default_stop = round(entry * (0.95 if side == "buy" else 1.05), 2)
+        stop = st.number_input("Stop loss price", min_value=0.01, step=0.01, key="size_stop", value=default_stop)
+        per_share = (entry - stop) if side == "buy" else (stop - entry)
+        if per_share <= 0:
+            st.caption("For a buy the stop has to be below the entry price; for a short sale, above it.")
+            return
+        shares = int(risk // per_share)
+        value = shares * entry
+        st.markdown(
+            f"<div class='line'><span>Risk if stopped out</span><b>{usd(shares * per_share)}</b></div>"
+            f"<div class='line'><span>Loss per share</span><span>{usd(per_share)} ({per_share / entry * 100:.1f}%)"
+            f"</span></div><div class='line total'><span>Shares</span><span>{shares:,}</span></div>"
+            f"<div class='line'><span>Position size</span><span>{usd(value)}"
+            + (f" ({value / equity * 100:.1f}% of account)" if equity else "") + "</span></div>",
+            unsafe_allow_html=True)
+        cap = plan["max_position"]
+        if equity and cap and value > equity * cap / 100:
+            st.warning(f"That's more than your {cap:g}% max position size (My trading plan).")
+        if shares < 1:
+            st.caption("The risk amount is smaller than the loss on a single share. Widen the risk or tighten the stop.")
+            return
+        st.button(f"Use {shares:,} shares with a stop at {usd(stop).replace('&#36;', '$')}", width="stretch",
+                  on_click=use_size, args=(shares, stop))
 
 
 INDICATORS = ["SMA 20", "SMA 50", "SMA 200", "Bollinger bands", "RSI", "MACD"]
@@ -783,7 +907,9 @@ def screen_fa():
 
 def screen_news():
     items = c_news(sym)
-    news_list(items)
+    news_with_sentiment(items[:15])
+    if not ai.provider():
+        st.caption("Sign in to Claude or add a Gemini key to tag each headline as positive or negative.")
 
 
 def screen_anr():
@@ -1001,13 +1127,50 @@ def quote_table(df: pd.DataFrame):
 def screen_mon():
     left, right = st.columns([2.3, 1], gap="large")
     with left:
-        st.markdown("<div class='tk-name'>Watchlist</div>", unsafe_allow_html=True)
-        with st.expander("Edit list"):
-            syms = st.text_input("Symbols (comma separated)", ", ".join(config.WATCHLIST),
-                                 help="For a permanent change, edit WATCHLIST in .env")
-        watchlist_panel(tuple(s.strip().upper() for s in syms.split(",") if s.strip()))
+        st.markdown("<div class='tk-name'>Watchlists</div>", unsafe_allow_html=True)
+        names, current = watchlists.names(), watchlists.active()
+        if len(names) > 1:
+            pick = st.segmented_control("List", names, default=current, key=f"wl_pick_{current}",
+                                        label_visibility="collapsed")
+            if pick and pick != current:
+                watchlists.set_active(pick)
+                st.rerun()
+        c = st.columns([3, 1], vertical_alignment="bottom")
+        new = c[0].text_input("Add a stock", placeholder="Add a stock, e.g. AMD", label_visibility="collapsed",
+                              key=f"wl_add_{current}")
+        if c[1].button("Add", width="stretch") and new.strip():
+            for s in new.replace(",", " ").split():
+                watchlists.add(s, current)
+            st.rerun()
+        symbols = watchlists.symbols(current)
+        if symbols:
+            watchlist_panel(tuple(symbols))
+        else:
+            st.caption("This list is empty. Add a stock above, or use \"+ Watchlist\" on any stock's page.")
         st.markdown(f"<div class='muted' style='margin-top:.8rem'>Click a stock to open it. {stream_badge()}</div>",
                     unsafe_allow_html=True)
+        with st.expander("Edit lists"):
+            if symbols:
+                for s in symbols:
+                    r = st.columns([4, 1, 1, 1], vertical_alignment="center")
+                    r[0].write(s)
+                    if r[1].button("↑", key=f"wl_up_{current}_{s}", help="Move up"):
+                        watchlists.move(s, -1, current); st.rerun()
+                    if r[2].button("↓", key=f"wl_dn_{current}_{s}", help="Move down"):
+                        watchlists.move(s, 1, current); st.rerun()
+                    if r[3].button("✕", key=f"wl_rm_{current}_{s}", help="Remove"):
+                        watchlists.remove(s, current); st.rerun()
+            st.divider()
+            c = st.columns(2, vertical_alignment="bottom")
+            make = c[0].text_input("New list name", placeholder="e.g. Earnings plays")
+            if c[1].button("Create list", width="stretch") and make.strip():
+                watchlists.create(make); st.rerun()
+            c = st.columns(2, vertical_alignment="bottom")
+            rename = c[0].text_input("Rename this list", value=current, key=f"wl_ren_{current}")
+            if c[1].button("Rename", width="stretch") and rename.strip() != current:
+                watchlists.rename(current, rename); st.rerun()
+            if len(names) > 1 and st.button(f"Delete \"{current}\"", type="secondary"):
+                watchlists.delete(current); st.rerun()
     with right:
         market_panel()
 
@@ -1348,7 +1511,7 @@ def screen_idea():
 def my_symbols() -> tuple[list[str], list[str]]:
     """(held, watchlist-only) stock symbols."""
     held = c_held()
-    return held, [s for s in config.WATCHLIST if s not in held]
+    return held, [s for s in watchlists.everything() if s not in held]
 
 
 def when_label(d) -> str:
@@ -1428,18 +1591,38 @@ def prediction_notice(errors: dict) -> str:
 
 def screen_pred():
     events, errors = c_predictions()
+    have_ibkr = "Interactive Brokers" in brokers
     st.markdown("<div class='tk-name'>Prediction markets</div><div class='muted'>What traders are paying for "
-                "each outcome, read as the market's odds. From Kalshi and Polymarket, refreshed every 10 minutes."
-                "</div>", unsafe_allow_html=True)
-    if errors:
-        (st.info if not events else st.warning)(prediction_notice(errors))
+                "each outcome, read as the market's odds. From Kalshi and Polymarket"
+                + (", plus IBKR ForecastEx through your IB Gateway" if have_ibkr else "")
+                + ", refreshed every 10 minutes.</div>", unsafe_allow_html=True)
+    public_errors = {k: v for k, v in errors.items() if not k.startswith("ForecastEx")}
+    fx_errors = {k.removeprefix("ForecastEx").strip() or "connection": v for k, v in errors.items()
+                 if k.startswith("ForecastEx")}
+    if public_errors:
+        (st.info if not events else st.caption)(prediction_notice(public_errors))
+    for code, err in fx_errors.items():
+        st.caption(f"ForecastEx {code}: {err}")
+    with st.expander("ForecastEx settings" if have_ibkr else "ForecastEx (needs Interactive Brokers)"):
+        st.caption("IBKR's own prediction markets, read through IB Gateway. Enter ForecastEx product codes, e.g. FF "
+                   "(US Fed Funds target rate). Find more codes in IBKR's ForecastTrader. Each outcome's odds are the "
+                   "price of its Yes contract, which pays $1.")
+        codes = st.text_input("Product codes", ", ".join(predictions.forecast_products()), key="fx_codes")
+        if st.button("Save codes"):
+            predictions.set_forecast_products(codes.replace(",", " ").split())
+            c_forecastex.clear()
+            st.rerun()
     if not events:
         return
     c = st.columns([5, 3], vertical_alignment="center")
-    topic = c[0].segmented_control("Topic", [*predictions.TOPICS, "All"], default="Fed & rates", key="pred_topic",
+    topics = [*predictions.TOPICS, *(["ForecastEx"] if have_ibkr else []), "All"]
+    topic = c[0].segmented_control("Topic", topics, default="Fed & rates", key="pred_topic",
                                    label_visibility="collapsed") or "All"
     query = c[1].text_input("Search markets", placeholder="Search markets, e.g. tariffs", label_visibility="collapsed")
-    found = predictions.matching(events, None if topic == "All" else topic, query)[:30]
+    if topic == "ForecastEx":
+        found = predictions.matching([e for e in events if e["source"] == "IBKR ForecastEx"], None, query)[:30]
+    else:
+        found = predictions.matching(events, None if topic == "All" else topic, query)[:30]
     if not found:
         st.caption("No open markets match.")
         return
@@ -1448,11 +1631,31 @@ def screen_pred():
         cols[i % 2].markdown(pred_card(e), unsafe_allow_html=True)
 
 
+def trader_context() -> dict:
+    """Who the user is as a trader: their plan, track record and recent journal notes."""
+    out: dict = {}
+    if profile.is_set():
+        out["my_trading_plan"] = profile.for_ai()
+    try:
+        fills, _, _ = all_activity()
+        s = gains.summary(closed_trades(fills))
+        if s.get("trades"):
+            out["my_track_record"] = {k: round(v, 2) if isinstance(v, float) else v for k, v in s.items()}
+    except Exception:
+        pass
+    recent = [e for e in journal.load() if e.get("note") or e.get("review")][-10:]
+    if recent:
+        out["my_recent_journal"] = [{k: e.get(k) for k in ("symbol", "side", "qty", "price", "note", "tags", "review")}
+                                    for e in recent]
+    return out
+
+
 # ---------- morning brief ----------
 def brief_context() -> str:
     held, watch = my_symbols()
     syms = held + watch
-    ctx: dict = {"date": pd.Timestamp.now(tz="America/New_York").strftime("%A %B %d, %Y %H:%M ET")}
+    ctx: dict = {"date": pd.Timestamp.now(tz="America/New_York").strftime("%A %B %d, %Y %H:%M ET"),
+                 **trader_context()}
     market = c_quotes(("SPY", "QQQ", "DIA", "IWM"))
     ctx["market_etfs"] = market[["symbol", "last", "change_pct"]].round(2).to_dict("records")
     if config.FRED_API_KEY:
@@ -1504,16 +1707,14 @@ Flag things to look into rather than telling me what to buy or sell."""
 
 
 def screen_brf():
-    if not config.AI_PROVIDER:
-        st.info("Add GEMINI_API_KEY or ANTHROPIC_API_KEY to .env to use the morning brief.")
+    if not ai.provider():
+        st.info("Sign in under Assistant > Connect Claude (or add a Gemini key) to use the morning brief.")
         return
-    from terminal import ai
-
     today = pd.Timestamp.now(tz="America/New_York").date()
     path = cache.DIR / f"brief-{today}.md"
     c = st.columns([6, 1], vertical_alignment="center")
     c[0].markdown(f"<div class='tk-name'>Morning brief</div><div class='muted'>{today:%A, %B %d} · written by "
-                  f"{config.AI_PROVIDER} from your holdings, watchlist and today's data</div>", unsafe_allow_html=True)
+                  f"{ai.provider()} from your holdings, watchlist and today's data</div>", unsafe_allow_html=True)
     rewrite = c[1].button("Rewrite", width="stretch")
     st.divider()
     if path.exists() and not rewrite:
@@ -1563,7 +1764,9 @@ def order_row(o: dict) -> str:
             f"<div><b>{o['symbol']}</b> <span class='muted'>{(o.get('type') or '').title()} "
             f"{(o.get('side') or '').title()}{price}</span><br><small class='muted'>{when}</small></div>"
             f"<div class='r'>{(o.get('qty') or 0):g} {'share' if o.get('qty') == 1 else 'shares'}<br>"
-            f"<small style='color:{color}'>{status}</small></div></div>")
+            f"<small style='color:{color}'>{status}</small></div></div>"
+            + (f"<div class='muted' style='font-size:.78rem;margin:-.4rem 0 .5rem'>IBKR: "
+               f"{htmllib.escape(o['message'])}</div>" if o.get("message") else ""))
 
 
 def broker_notices():
@@ -1641,7 +1844,7 @@ def screen_port():
             st.warning(f"{name} not connected: {err}")
     with right:
         st.markdown("<div class='box-title'>Watchlist</div>", unsafe_allow_html=True)
-        watchlist_panel(tuple(config.WATCHLIST), compact=True)
+        watchlist_panel(tuple(watchlists.symbols()), compact=True)
 
 
 PORT_SPY = {"1D": ("1d", "5m"), "1W": ("5d", "15m"), "1M": ("1mo", "1d"), "3M": ("3mo", "1d"), "1Y": ("1y", "1d")}
@@ -1769,6 +1972,7 @@ def ai_context() -> str:
         {"title": e["title"], "source": e["source"], "outcomes": [(o, round(p, 3)) for o, p in e["outcomes"][:4]]}
         for e in predictions.matching(c_predictions()[0], "Fed & rates")[:3]
         + predictions.matching(c_predictions()[0], None, company or sym)[:3]])
+    ctx.update(trader_context())
     ctx["holdings"] = {}
     for name, b in brokers.items():
         try:
@@ -1779,14 +1983,12 @@ def ai_context() -> str:
 
 
 def screen_ai():
-    if not config.AI_PROVIDER:
-        st.info("Add GEMINI_API_KEY or ANTHROPIC_API_KEY to .env to use the research panel, or skip the key "
+    if not ai.provider():
+        st.info("Sign in under Assistant > Connect Claude, or add GEMINI_API_KEY / ANTHROPIC_API_KEY, to use the research panel, or "
                 "and connect Claude Code / Claude Desktop to this app's data instead (see README).")
         return
-    from terminal import ai
-
     c = st.columns([8, 1])
-    c[0].caption(f"{config.AI_PROVIDER} sees the data on screen for {sym} plus your holdings, and can search "
+    c[0].caption(f"{ai.provider()} sees the data on screen for {sym} plus your holdings, and can search "
                  "the web. It cannot place orders.")
     if c[1].button("Clear"):
         ss.chat, ss.chat_api = [], []
@@ -1811,6 +2013,296 @@ def screen_ai():
             st.error(ai.error_text(e))
 
 
+LOCAL_TZ = "America/Denver"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def c_activity(broker_name: str):
+    return c_brokers()[0][broker_name].activity()
+
+
+def all_activity() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """Fills and dividends from every connected broker, with a broker column; errors by broker."""
+    fills, divs, errors = [], [], {}
+    for name in brokers:
+        try:
+            f, d = c_activity(name)
+            fills.append(f.assign(broker=name))
+            divs.append(d.assign(broker=name))
+        except Exception as e:
+            errors[name] = str(e)
+    cat = lambda xs, cols: pd.concat(xs, ignore_index=True) if xs else pd.DataFrame(columns=cols)
+    return cat(fills, ["symbol", "side", "qty", "price", "time", "broker"]), \
+        cat(divs, ["symbol", "amount", "date", "broker"]), errors
+
+
+def closed_trades(fills: pd.DataFrame) -> pd.DataFrame:
+    parts = [gains.realized(g).assign(broker=b) for b, g in fills.groupby("broker")] if not fills.empty else []
+    return pd.concat(parts, ignore_index=True) if parts else gains.realized(fills)
+
+
+def stat_row(s: dict):
+    m = st.columns(6)
+    m[0].metric("Closed trades", s.get("trades", 0))
+    if not s.get("trades"):
+        return
+    m[1].metric("Win rate", f"{s['win_rate']:.0f}%")
+    m[2].metric("Total P/L", usd(s["total"], sign=True).replace("&#36;", "$"))
+    m[3].metric("Average win", usd(s["avg_win"]).replace("&#36;", "$"))
+    m[4].metric("Average loss", usd(s["avg_loss"]).replace("&#36;", "$"))
+    m[5].metric("Profit factor", num(s["profit_factor"]), help="Total won ÷ total lost. Above 1 means winners outweigh losers.")
+
+
+def screen_jrnl():
+    st.markdown("<div class='tk-name'>Trade journal</div><div class='muted'>Every order you send from the app, with "
+                "your note on why. Add a review once a trade is done.</div>", unsafe_allow_html=True)
+    entries = journal.load()
+    fills, _, errors = all_activity()
+    closed = closed_trades(fills)
+    st.subheader("Track record")
+    stat_row(gains.summary(closed))
+    # Which journal tags win: credit each closed trade to the latest journal entry that opened it.
+    if not closed.empty and entries:
+        def utc(ts):
+            ts = pd.Timestamp(ts)
+            return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+
+        tagged = []
+        for t in closed.itertuples():
+            opener = "buy" if t.direction == "Long" else "sell"
+            # Allow a minute of clock difference between the app and the broker's fill time.
+            cutoff = utc(t.opened) + pd.Timedelta(minutes=1)
+            match = [e for e in entries if e["symbol"] == t.symbol and e["side"] == opener
+                     and pd.Timestamp(e["time"], unit="s", tz="UTC") <= cutoff]
+            for tag in (match[-1]["tags"] if match else []) or ["(no tag)"]:
+                tagged.append({"tag": tag, "pl": t.pl, "win": t.pl > 0})
+        if tagged:
+            by = pd.DataFrame(tagged).groupby("tag").agg(trades=("pl", "size"), win_rate=("win", "mean"), total=("pl", "sum"))
+            by["win_rate"] *= 100
+            st.markdown("<div class='box-title' style='margin-top:1rem'>By setup tag</div>", unsafe_allow_html=True)
+            st.dataframe(color_moves(by.sort_values("total", ascending=False), ["total"]), width="stretch",
+                         column_config={"win_rate": st.column_config.NumberColumn("Win rate", format="%.0f%%"),
+                                        "total": st.column_config.NumberColumn("Total P/L", format="$%.2f"),
+                                        "trades": "Trades"})
+    for name, err in errors.items():
+        st.caption(f"{name} trade history unavailable: {err}")
+    st.subheader("Entries")
+    if not entries:
+        st.caption("No entries yet. Orders you submit from the order card are logged here; add a note under "
+                   "\"Journal note\" before you submit.")
+        return
+    syms = sorted({e["symbol"] for e in entries})
+    only = st.multiselect("Filter", syms, placeholder="All symbols", label_visibility="collapsed")
+    for e in reversed(entries):
+        if only and e["symbol"] not in only:
+            continue
+        when = pd.Timestamp(e["time"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
+        price = f" @ {usd(e['price'])}" if e.get("price") else ""
+        exits = " · ".join(x for x in (f"stop {usd(e['stop_loss'])}" if e.get("stop_loss") else "",
+                                       f"target {usd(e['take_profit'])}" if e.get("take_profit") else "") if x)
+        with st.container(border=True):
+            st.markdown(
+                f"<b><a href='{link(e['symbol'])}' target='_self' style='color:#fff'>{e['symbol']}</a></b> "
+                f"<span class='muted'>{e['side'].title()} {e['qty']:g} · {e['type'].title()}{price} · {e['broker']} "
+                f"{e.get('mode', '').lower()} · {when:%b %d, %Y %I:%M %p}</span>"
+                + (f"<br><span class='muted'>{exits}</span>" if exits else "")
+                + "".join(f" <span class='chip' style='background:#1e2124'>{htmllib.escape(t)}</span>" for t in e["tags"])
+                + (f"<div style='margin-top:.4rem'>{htmllib.escape(e['note'])}</div>" if e["note"] else
+                   "<div class='muted' style='margin-top:.4rem'>No note.</div>"),
+                unsafe_allow_html=True)
+            c = st.columns([5, 1, 1], vertical_alignment="bottom")
+            review = c[0].text_input("How did it go?", value=e.get("review", ""), key=f"rv_{e['id']}",
+                                     placeholder="How did it go? What would you do differently?",
+                                     label_visibility="collapsed")
+            if c[1].button("Save", key=f"rvs_{e['id']}", width="stretch"):
+                journal.update(e["id"], review=review); st.rerun()
+            if c[2].button("Delete", key=f"rvd_{e['id']}", width="stretch"):
+                journal.delete(e["id"]); st.rerun()
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def c_dividend_info(symbol: str) -> dict:
+    i = c_info(symbol)
+    return {k: i.get(k) for k in ("exDividendDate", "dividendRate", "lastDividendValue", "dividendYield", "shortName")}
+
+
+def screen_gain():
+    st.markdown("<div class='tk-name'>Gains & dividends</div><div class='muted'>Profit on closed trades "
+                "(first-in, first-out) and dividend income, for tracking and tax time.</div>", unsafe_allow_html=True)
+    if not brokers:
+        broker_notices()
+        return
+    fills, divs, errors = all_activity()
+    closed = closed_trades(fills)
+    years = sorted({d.year for d in pd.to_datetime(closed["closed"])} | {d.year for d in pd.to_datetime(divs["date"])},
+                   reverse=True) or [pd.Timestamp.now().year]
+    year = st.segmented_control("Year", ["All", *years], default=years[0], key="gain_year",
+                                label_visibility="collapsed") or years[0]
+    if year != "All":
+        closed = closed[pd.to_datetime(closed["closed"]).dt.year == year]
+        divs = divs[pd.to_datetime(divs["date"]).dt.year == year]
+    s = gains.summary(closed)
+    st.subheader("Realized gains")
+    stat_row(s)
+    if s.get("trades"):
+        st.markdown(f"<div class='muted'>Short-term (held a year or less): <b style='color:#fff'>"
+                    f"{usd(s['short_term'], sign=True)}</b> · Long-term (more than a year): <b style='color:#fff'>"
+                    f"{usd(s['long_term'], sign=True)}</b></div>", unsafe_allow_html=True)
+        view = closed.assign(opened=pd.to_datetime(closed["opened"]).dt.date,
+                             closed=pd.to_datetime(closed["closed"]).dt.date).sort_values("closed", ascending=False)
+        st.dataframe(color_moves(view, ["pl", "pl_pct"]), hide_index=True, width="stretch", height=360,
+                     column_config={"symbol": "Symbol", "opened": "Opened", "closed": "Closed", "qty": "Shares",
+                                    "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
+                                    "proceeds": st.column_config.NumberColumn("Proceeds", format="$%.2f"),
+                                    "pl": st.column_config.NumberColumn("Gain / loss", format="$%+.2f"),
+                                    "pl_pct": st.column_config.NumberColumn("Return", format="%+.2f%%"),
+                                    "days": "Days held", "term": "Term", "direction": "Long/short", "broker": "Account"})
+        st.download_button("Download realized gains (CSV)", view.to_csv(index=False), f"realized-gains-{year}.csv",
+                           "text/csv")
+    else:
+        st.caption("No closed trades yet. A trade counts once you've sold shares you bought (or bought back a short).")
+
+    st.subheader("Dividends received")
+    if divs.empty:
+        st.caption("No dividends received yet.")
+    else:
+        m = st.columns(3)
+        m[0].metric("Total", usd(divs["amount"].sum()).replace("&#36;", "$"))
+        m[1].metric("Payments", len(divs))
+        top = divs.groupby("symbol")["amount"].sum().sort_values(ascending=False)
+        m[2].metric("Largest payer", f"{top.index[0]} ({usd(top.iloc[0]).replace('&#36;', '$')})")
+        view = divs.assign(date=pd.to_datetime(divs["date"]).dt.date).sort_values("date", ascending=False)
+        st.dataframe(view, hide_index=True, width="stretch", height=260,
+                     column_config={"symbol": "Symbol", "date": "Paid", "broker": "Account",
+                                    "amount": st.column_config.NumberColumn("Amount", format="$%.2f")})
+        st.download_button("Download dividends (CSV)", view.to_csv(index=False), f"dividends-{year}.csv", "text/csv")
+
+    st.subheader("Upcoming dividends on what you hold")
+    rows = []
+    for b in brokers.values():
+        try:
+            held = b.positions()
+        except Exception:
+            continue
+        for p in held:
+            if OrderRequest(p["symbol"], "buy", 1).is_option or (p.get("qty") or 0) <= 0:
+                continue
+            d = c_dividend_info(p["symbol"])
+            if not d.get("dividendRate"):
+                continue
+            ex = pd.Timestamp(d["exDividendDate"], unit="s").date() if d.get("exDividendDate") else None
+            rows.append({"symbol": p["symbol"], "shares": p["qty"],
+                         "ex_date": ex if ex and ex >= pd.Timestamp.now().date() else None,
+                         "per_payment": d.get("lastDividendValue"),
+                         "next_payment": (d.get("lastDividendValue") or 0) * p["qty"],
+                         "yearly": d["dividendRate"] * p["qty"]})
+    if rows:
+        up = pd.DataFrame(rows).sort_values("ex_date", na_position="last")
+        st.metric("Expected dividend income per year", usd(up["yearly"].sum()).replace("&#36;", "$"))
+        st.dataframe(up, hide_index=True, width="stretch",
+                     column_config={"symbol": "Symbol", "shares": "Shares", "ex_date": "Next ex-dividend date",
+                                    "per_payment": st.column_config.NumberColumn("Per share", format="$%.4f"),
+                                    "next_payment": st.column_config.NumberColumn("Next payment (est.)", format="$%.2f"),
+                                    "yearly": st.column_config.NumberColumn("Per year (est.)", format="$%.2f")})
+        st.caption("Estimates from the last dividend paid and the yearly rate; companies can change them. "
+                   "Own the shares before the ex-dividend date to get the payment.")
+    else:
+        st.caption("None of your current holdings pay a dividend.")
+    for name, err in errors.items():
+        st.warning(f"{name} history unavailable: {err}")
+    if "Interactive Brokers" in brokers:
+        st.caption("Interactive Brokers only shares about a day of trades through IB Gateway and no dividends, so "
+                   "use IBKR's own statements for its full history.")
+    st.caption("For your records, not tax advice. Check your broker's 1099 for the official figures.")
+
+
+def screen_plan():
+    st.markdown("<div class='tk-name'>My trading plan</div><div class='muted'>Sent with every question to the AI "
+                "(Ask AI, the morning brief), so its answers fit your goals, risk limits and rules. The risk numbers "
+                "also set the defaults in \"Size by risk\" on the order card.</div>", unsafe_allow_html=True)
+    p = profile.load()
+    with st.form("plan"):
+        values = {}
+        for key, (label, hint, kind, _) in profile.FIELDS.items():
+            if kind == "area":
+                values[key] = st.text_area(label, p[key], placeholder=hint, height=80)
+            elif kind == "number":
+                values[key] = st.number_input(label, value=float(p[key] or 0), min_value=0.0, help=hint or None,
+                                              step=1000.0 if key == "account_size" else 0.5)
+            else:
+                options = kind.split(":", 1)[1].split("|")
+                values[key] = st.segmented_control(label, options, default=p[key] if p[key] in options else options[0])
+        if st.form_submit_button("Save plan", type="primary"):
+            profile.save(values)
+            st.success("Saved. The AI will use it from your next question.")
+
+
+def screen_cld():
+    st.markdown("<div class='tk-name'>Connect Claude</div><div class='muted'>Sign in with your Claude subscription, "
+                "the same way the Claude Code CLI does. Ask AI, the morning brief and headline sentiment then run on "
+                "your subscription; no API key needed.</div>", unsafe_allow_html=True)
+    st.write("")
+    if not claude_code.binary():
+        st.warning("Claude Code isn't installed here. It's included in the Home Assistant add-on; on a computer, "
+                   "install Claude Code and sign in with `claude` in a terminal.")
+        return
+    status = claude_code.status(max_age=5)
+    login = ss.get("claude_login")
+    if status.get("loggedIn") and not (login and not login.done):
+        who = status.get("email") or status.get("account", {}).get("email") or "your Claude account"
+        st.success(f"Signed in as {who} ({status.get('subscriptionType') or status.get('authMethod')}).")
+        st.markdown(f"<div class='muted'>The AI in this app is currently: <b style='color:#fff'>{ai.provider()}</b>."
+                    "</div>", unsafe_allow_html=True)
+        c = st.columns(2)
+        if c[0].button("Test it", width="stretch"):
+            with st.spinner("Asking Claude…"):
+                try:
+                    st.info(claude_code.ask("In one short sentence, confirm you're connected and ready to help "
+                                            "with stock research.", "Answer in one sentence."))
+                except Exception as e:
+                    st.error(str(e))
+        if c[1].button("Sign out", width="stretch"):
+            claude_code.logout()
+            ss.pop("claude_login", None)
+            st.rerun()
+        st.caption("Questions use your subscription's usage limits, the same pool as your normal Claude use. In "
+                   "this app Claude can only answer and search the web; it can't run commands or change files.")
+        return
+    if not login or login.done:
+        if login and login.done and login.result:
+            (st.error if "error" in login.result.lower() or "fail" in login.result.lower() else st.info)(login.result)
+        if st.button("Sign in with Claude", type="primary"):
+            ss.claude_login = claude_code.Login()
+            st.rerun()
+        return
+    login_steps(login)
+
+
+@st.fragment(run_every=2)
+def login_steps(login):
+    if login.done:
+        claude_code.forget_status()
+        st.rerun()
+    if not login.url:
+        st.caption("Starting sign-in…")
+        return
+    st.markdown("**1.** Open the sign-in page and approve access with your Claude account:")
+    st.link_button("Open Claude sign-in", login.url, type="primary")
+    st.markdown("**2.** Copy the code it shows you and paste it here:")
+    c = st.columns([4, 1], vertical_alignment="bottom")
+    code = c[0].text_input("Code", key="claude_code_input", label_visibility="collapsed", placeholder="Paste code")
+    if c[1].button("Finish", width="stretch", disabled=not code.strip()):
+        login.send_code(code)
+        st.caption("Checking…")
+    if st.button("Cancel"):
+        login.cancel()
+        ss.pop("claude_login", None)
+        st.rerun(scope="app")
+    if time.time() - login.started > 600:
+        login.cancel()
+        st.warning("Sign-in timed out. Start again.")
+
+
 def screen_help():
     st.subheader("Keyboard shortcuts")
     st.markdown("In the search box, type a ticker, a screen code, or both, then press Enter. "
@@ -1825,5 +2317,5 @@ def screen_help():
  "ERN": screen_ern, "SEC": screen_sec, "ECO": screen_eco, "MON": screen_mon,
  "SCR": screen_scr, "SPX": screen_spx, "OMON": screen_omon, "ALRT": screen_alrt, "PORT": screen_port, "ORD": screen_ord,
  "AI": screen_ai, "HELP": screen_help, "BT": screen_bt, "IDEA": screen_idea, "CAL": screen_cal, "PRED": screen_pred,
- "BRF": screen_brf}[fn]()
+ "BRF": screen_brf, "JRNL": screen_jrnl, "GAIN": screen_gain, "PLAN": screen_plan, "CLD": screen_cld}[fn]()
 earnings_reminders()  # last, so its first (slower) data fetch never holds up the screen

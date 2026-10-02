@@ -58,6 +58,22 @@ Type a ticker, a function code, or both in the command bar: `NVDA`, `GP`, `MSFT 
 | ORD | Order ticket (stocks and option contracts, optional take-profit / stop-loss bracket via Alpaca), open orders, cancel |
 | AI | Research chat (Claude if `ANTHROPIC_API_KEY` is set, otherwise Gemini) |
 
+## Also in the app
+
+- **Home**: Portfolio (opens first), Trade, **Journal** (every order with your note, win rate by setup tag),
+  **Gains & dividends** (first-in-first-out realized gains split short/long term, dividends received and
+  upcoming, CSV downloads), Alerts.
+- **Watchlists**: several named lists saved in the app; add/remove from the Watchlist screen or with
+  "+ Watchlist" on any stock.
+- **Order card**: "Size by risk" works out shares from how much you're willing to lose and your stop;
+  "Journal note" saves why you made the trade.
+- **News sentiment**: each headline tagged positive / negative / neutral by the AI, with an overall mood.
+- **Predictions**: Kalshi and Polymarket, plus IBKR **ForecastEx** odds through IB Gateway (product codes set
+  on that screen, e.g. FF for the Fed funds rate).
+- **Assistant > My trading plan**: goals, risk limits and rules sent with every AI question.
+- **Assistant > Connect Claude**: sign in with your Claude subscription the same way the Claude Code CLI does.
+  The AI features then run on your subscription (its usage limits apply); Claude can only answer and search
+  the web there. Choose the AI with `ai_choice` in the add-on (auto = subscription, then API key, then Gemini).
 ## Run it on Home Assistant (Green or any 64-bit Home Assistant OS)
 
 This repository is a Home Assistant add-on repository with two add-ons:

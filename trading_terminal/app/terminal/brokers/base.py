@@ -64,6 +64,14 @@ class Broker:
     def cancel_order(self, order_id: str) -> None:
         raise NotImplementedError
 
+    def activity(self):
+        """(fills, dividends) DataFrames. fills: symbol, side, qty, price, time.
+        dividends: symbol, amount, date. Empty when the broker doesn't provide them."""
+        import pandas as pd
+
+        return pd.DataFrame(columns=["symbol", "side", "qty", "price", "time"]), \
+            pd.DataFrame(columns=["symbol", "amount", "date"])
+
     def portfolio_history(self, period: str = "1M"):
         """Account value over time as a pandas Series; empty if the broker doesn't provide it."""
         import pandas as pd
