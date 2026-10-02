@@ -1,5 +1,5 @@
 name: IB Gateway
-version: "0.1.1"
+version: "0.1.2"
 slug: ib_gateway
 description: Interactive Brokers Gateway (headless, auto-login) for the Trading Terminal add-on
 arch:
@@ -9,7 +9,8 @@ init: false
 startup: services  # starts before the Trading Terminal add-on (startup: application)
 boot: auto
 # Nothing is published outside Home Assistant by default. The Trading Terminal add-on reaches it
-# on Home Assistant's internal add-on network at local-ib-gateway:4004 (paper) or :4003 (live).
+# on Home Assistant's internal add-on network, using the hostname on this add-on's Info tab,
+# port 4004 (paper) or 4003 (live).
 ports:
   4003/tcp: null
   4004/tcp: null
@@ -17,17 +18,22 @@ ports_description:
   4003/tcp: Live API (leave empty unless a program outside Home Assistant needs it)
   4004/tcp: Paper API (leave empty unless a program outside Home Assistant needs it)
 options:
-  ib_username: ""
-  ib_password: ""
   trading_mode: paper
+  paper_username: ""
+  paper_password: ""
+  live_username: ""
+  live_password: ""
   read_only_api: false
   twofa_timeout_action: restart
   auto_restart_time: "11:59 PM"
-  time_zone: America/New_York
+  time_zone: America/Denver
 schema:
-  ib_username: str
-  ib_password: password
-  trading_mode: list(paper|live)
+  # paper: log in to the paper account only. live: live only. both: run both at once (more memory).
+  trading_mode: list(paper|live|both)
+  paper_username: str?
+  paper_password: password?
+  live_username: str?
+  live_password: password?
   read_only_api: bool
   twofa_timeout_action: list(restart|exit)
   auto_restart_time: str
