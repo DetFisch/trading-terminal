@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+alerts.json
+.cache/
+.claude/
+*.log
+.venv/
+__pycache__/
+*.pyc
