@@ -16,17 +16,21 @@ from terminal.brokers import OrderRequest, connect_all
 
 # Sections and their screens. The codes also work typed into the search box ("NVDA GP").
 NAV = {
+    "Home": {"PORT": "Portfolio", "ORD": "Trade", "ALRT": "Alerts"},
     "Stock": {"DES": "Overview", "GP": "Chart", "N": "News", "FA": "Financials", "VAL": "Valuation",
               "ANR": "Analysts", "ERN": "Earnings", "SEC": "Filings & insiders", "OMON": "Options",
               "BT": "Backtest"},
     "Market": {"MON": "Watchlist", "SPX": "S&P 500", "IDEA": "Ideas", "CAL": "Earnings calendar",
                "PRED": "Predictions", "SCR": "Screens", "ECO": "Economy"},
-    "Trading": {"PORT": "Portfolio", "ORD": "Trade", "ALRT": "Alerts"},
     "Assistant": {"BRF": "Morning brief", "AI": "Ask AI", "HELP": "Shortcuts"},
 }
+HOME = "PORT"  # first screen, like Robinhood's home: account value, positions, watchlist
 FUNCTIONS = {code: label for items in NAV.values() for code, label in items.items()}
 GROUP_OF = {code: group for group, items in NAV.items() for code in items}
-AMBER, GREEN, RED, MUTED = "#f5a524", "#00c805", "#ff5000", "#8c8c8c"
+# Brand accent is burnt orange; green and red are kept only for gains and losses, and the loss red
+# is a true red so it is never mistaken for the accent.
+ORANGE = "#e2711d"
+AMBER, GREEN, RED, MUTED = "#f5a524", "#00c805", "#f6465d", "#8c8c8c"
 CLEAR = "rgba(0,0,0,0)"
 LINE = "#1e2124"  # hairline borders and chart grid
 
@@ -183,7 +187,7 @@ stream.start()  # background price stream; no-op if already running or Alpaca is
 
 ss = st.session_state
 ss.setdefault("ticker", "AAPL")
-ss.setdefault("fn", "DES")
+ss.setdefault("fn", HOME)
 ss.setdefault("pending_order", None)
 ss.setdefault("ticket_symbol", None)  # set by the options chain to trade a contract
 ss.setdefault("chat", [])  # [(role, text)] for display
@@ -295,7 +299,7 @@ if "t" in st.query_params or "f" in st.query_params:  # ?f=CODE opens a screen d
     st.query_params.clear()
 
 sym = ss.ticker
-fn = ss.fn if ss.fn in FUNCTIONS else "DES"
+fn = ss.fn if ss.fn in FUNCTIONS else HOME
 group = GROUP_OF[fn]
 # The two nav widgets mirror `fn`, so typed commands and buttons that change screen stay in sync.
 ss.nav_group, ss.nav_item = group, fn
@@ -307,8 +311,7 @@ if STOCK_HEADER or fn == "ORD":
         q = c_quote(sym)
     except Exception:
         q = None
-# Like Robinhood, the accent follows the stock: green when it is up today, orange-red when down.
-ACC = RED if q and (q.get("change") or 0) < 0 else GREEN
+ACC = ORANGE  # brand accent: buttons, tabs, highlights. Gains and losses stay green / red.
 st.markdown(f"<style>:root {{--acc: {ACC};}}</style>", unsafe_allow_html=True)
 
 
@@ -321,7 +324,8 @@ def pick_item():
 
 
 top = st.columns([1.1, 3.2, 5, 1.4], vertical_alignment="center")
-top[0].markdown("<div class='brand'>▮ Terminal</div>", unsafe_allow_html=True)
+top[0].markdown(f"<a class='brand' href='?f={HOME}' target='_self' style='text-decoration:none;display:block'>▮ Terminal</a>",
+               unsafe_allow_html=True)
 top[1].text_input(
     "Search", key="cmd", on_change=run_command, placeholder="Search", label_visibility="collapsed",
     icon=":material/search:", help="Type a ticker (NVDA), a screen code (GP), or both (MSFT FA) and press Enter",
@@ -470,7 +474,7 @@ def screen_des():
             if df.empty:
                 st.markdown("<div class='loading'>No price history for this range yet.</div>", unsafe_allow_html=True)
             elif rng == "1D":
-                line_chart(df.Close, 330, ACC, (q or {}).get("prev_close"), rng)
+                line_chart(df.Close, 330, RED if (q or {}).get("change", 0) < 0 else GREEN, (q or {}).get("prev_close"), rng)
             else:
                 line_chart(df.Close, 330, GREEN if df.Close.iloc[-1] >= df.Close.iloc[0] else RED, None, rng)
         if not (i.get("longName") or i.get("shortName")):
@@ -1529,9 +1533,30 @@ def screen_brf():
     path.write_text(text.replace("\\$", "$"), encoding="utf-8")
 
 
+# Raw broker status (Alpaca snake_case, IBKR CamelCase, compared lower-case, no "_") ->
+# (plain label, state). "open" orders can still be canceled.
+ORDER_STATUS = {
+    "pendingsubmit": ("Sending to IBKR", "open"), "apipending": ("Sending to IBKR", "open"),
+    "presubmitted": ("Waiting for market open", "open"), "submitted": ("Working", "open"),
+    "pendingcancel": ("Canceling", "open"), "pendingnew": ("Sending to Alpaca", "open"),
+    "new": ("Working", "open"), "accepted": ("Accepted", "open"), "held": ("Waiting to trigger", "open"),
+    "acceptedforbidding": ("Accepted", "open"), "partiallyfilled": ("Partly filled", "open"),
+    "pendingreplace": ("Updating", "open"), "calculated": ("Working", "open"),
+    "filled": ("Filled", "done"), "doneforday": ("Done for the day", "done"),
+    "cancelled": ("Canceled", "closed"), "canceled": ("Canceled", "closed"), "apicancelled": ("Canceled", "closed"),
+    "expired": ("Expired", "closed"), "rejected": ("Rejected", "closed"), "inactive": ("Not active", "closed"),
+    "replaced": ("Replaced", "closed"), "stopped": ("Stopped", "closed"), "suspended": ("Suspended", "closed"),
+}
+
+
+def order_status(o: dict) -> tuple[str, str]:
+    raw = (o.get("status") or "").lower().replace("_", "")
+    return ORDER_STATUS.get(raw, ((o.get("status") or "Unknown").replace("_", " ").capitalize(), "open"))
+
+
 def order_row(o: dict) -> str:
-    status = (o.get("status") or "").replace("_", " ").title()
-    color = GREEN if status == "Filled" else MUTED if status in ("Canceled", "Expired", "Rejected") else AMBER
+    status, state = order_status(o)
+    color = GREEN if state == "done" else MUTED if state == "closed" else AMBER
     when = pd.Timestamp(o["submitted"]).strftime("%b %d, %H:%M") if o.get("submitted") else ""
     price = f" @ {usd(o['limit_price'])}" if o.get("limit_price") else ""
     return (f"<div class='line' style='border-bottom:1px solid {LINE};padding:.75rem 0'>"
@@ -1682,29 +1707,35 @@ def screen_ord():
             order_ticket(symbol_input=True)
     with book:
         st.markdown("<div class='tk-name' style='font-size:1.5rem'>Orders</div>", unsafe_allow_html=True)
-        for name, b in brokers.items():
-            try:
-                orders = b.orders()
-            except Exception as e:
-                st.error(f"{name}: {e}")
-                continue
-            if len(brokers) > 1:
-                st.caption(name)
-            if not orders:
-                st.caption("No orders yet.")
-                continue
-            st.markdown("<div>" + "".join(order_row(o) for o in orders[:25]) + "</div>", unsafe_allow_html=True)
-            open_ = [o for o in orders if o["status"].lower() in
-                     ("new", "accepted", "pending_new", "partially_filled", "presubmitted", "submitted", "pendingsubmit")]
-            if open_:
-                pick = st.selectbox(f"Cancel an open {name} order", open_, key=f"cx_{name}",
-                                    format_func=lambda o: f"{o['side'].upper()} {o['qty']:g} {o['symbol']} ({o['status']})")
-                if st.button("Cancel order", key=f"cxb_{name}"):
-                    try:
-                        b.cancel_order(pick["id"])
-                        st.success("Cancel request sent.")
-                    except Exception as e:
-                        st.error(f"Cancel failed: {e}")
+        orders_panel()
+
+
+@st.fragment(run_every=3)
+def orders_panel():
+    """Order list; re-asks each broker for statuses every few seconds."""
+    for name, b in brokers.items():
+        try:
+            orders = b.orders()
+        except Exception as e:
+            st.error(f"{name}: {e}")
+            continue
+        if len(brokers) > 1:
+            st.caption(name)
+        if not orders:
+            st.caption("No orders yet.")
+            continue
+        st.markdown("<div>" + "".join(order_row(o) for o in orders[:25]) + "</div>", unsafe_allow_html=True)
+        open_ = [o for o in orders if order_status(o)[1] == "open"]
+        if open_:
+            pick = st.selectbox(f"Cancel an open {name} order", open_, key=f"cx_{name}",
+                                format_func=lambda o: f"{o['side'].upper()} {o['qty']:g} {o['symbol']} "
+                                                      f"({order_status(o)[0]})")
+            if st.button("Cancel order", key=f"cxb_{name}"):
+                try:
+                    b.cancel_order(pick["id"])
+                    st.success("Cancel request sent.")
+                except Exception as e:
+                    st.error(f"Cancel failed: {e}")
 
 
 def ai_context() -> str:
