@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 from ib_async import IB, LimitOrder, MarketOrder, Stock, StopOrder
 
@@ -49,13 +50,26 @@ class IBKRBroker(Broker):
     def _run(self, coro, timeout: float = 20):
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
 
+    RETRY_AFTER = 30  # seconds between reconnect attempts while IB Gateway is down
+
     async def _connect(self):
         self.ib = IB()
         await self.ib.connectAsync(self.host, self.port, clientId=self.client_id, timeout=8)
 
     async def _ensure(self):
-        if self.ib is None or not self.ib.isConnected():
+        if self.ib is not None and self.ib.isConnected():
+            return
+        # While IB Gateway is down, fail fast instead of making every screen wait 8 s for a new attempt.
+        since = time.time() - getattr(self, "_failed_at", 0)
+        if since < self.RETRY_AFTER:
+            raise ConnectionError(f"IB Gateway is not connected (retrying in {int(self.RETRY_AFTER - since)}s): "
+                                  f"{getattr(self, '_fail_reason', '')}")
+        try:
             await self._connect()
+            self._failed_at = 0
+        except Exception as e:
+            self._failed_at, self._fail_reason = time.time(), str(e) or type(e).__name__
+            raise
 
     def account(self) -> dict:
         async def go():

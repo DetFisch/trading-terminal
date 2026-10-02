@@ -101,19 +101,29 @@ hr {border-color: #1e2124 !important; margin: .4rem 0 1rem !important;}
 .about {color: #d9d9d9; line-height: 1.55;}
 .about summary {color: var(--acc); font-weight: 600; cursor: pointer; margin: .3rem 0 1rem;}
 
+/* In-app links: a stock row or card with an invisible button laid over it, so a click opens the
+   stock without reloading the page */
+[class*="st-key-navlist_"], [class*="st-key-navlist_"] [data-testid="stVerticalBlock"] {gap: 0 !important;}
+[class*="st-key-nav_"] {position: relative;}
+[class*="st-key-nav_"] [data-testid="stElementContainer"]:has(button) {position: absolute; inset: 0; z-index: 2; margin: 0;
+    width: 100% !important; height: 100% !important; max-width: none !important;}
+[class*="st-key-nav_"] [data-testid="stMarkdownContainer"], [class*="st-key-nav_"] [data-testid="stMarkdown"] {margin-bottom: 0 !important;}
+[class*="st-key-nav_"] [data-testid="stButton"], [class*="st-key-nav_"] button {width: 100% !important; height: 100% !important;}
+[class*="st-key-nav_"] button {opacity: 0; cursor: pointer;}
+[class*="st-key-nav_"]:hover div.row, [class*="st-key-nav_"]:hover div.card {background: #0d0f11;}
 /* Lists: watchlist, positions, movers */
-a.row {display: grid; grid-template-columns: 1.2fr 1fr 96px 1fr; align-items: center; gap: .8rem;
+div.row {display: grid; grid-template-columns: 1.2fr 1fr 96px 1fr; align-items: center; gap: .8rem;
     padding: .75rem .2rem; border-bottom: 1px solid #1e2124; color: #fff !important; text-decoration: none !important;}
-a.row:hover {background: #0d0f11;}
-a.row.compact {grid-template-columns: 1fr 72px 1fr;}
+div.row:hover {background: #0d0f11;}
+div.row.compact {grid-template-columns: 1fr 72px 1fr;}
 .row b {font-weight: 700;} .row small {display: block; color: #8c8c8c; font-size: .78rem; margin-top: .1rem;}
 .row .r {text-align: right; font-variant-numeric: tabular-nums;}
 .pill {display: inline-block; min-width: 4.6rem; text-align: center; color: #000; font-weight: 700; font-size: .8rem;
     padding: .3rem .5rem; border-radius: .45rem; font-variant-numeric: tabular-nums;}
 .cards {display: grid; grid-template-columns: repeat(5, 1fr); gap: .8rem;}
-a.card {border: 1px solid #1e2124; border-radius: .8rem; padding: .9rem 1rem; color: #fff !important;
+div.card {border: 1px solid #1e2124; border-radius: .8rem; padding: .9rem 1rem; color: #fff !important;
     text-decoration: none !important; display: block;}
-a.card:hover {background: #0d0f11;}
+div.card:hover {background: #0d0f11;}
 .card .n {color: #8c8c8c; font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
 .card .p {font-size: 1.15rem; font-weight: 700; margin-top: .5rem; font-variant-numeric: tabular-nums;}
 .box {border: 1px solid #1e2124; border-radius: .8rem; padding: 1.1rem 1.2rem 1rem; margin-top: .2rem;}
@@ -172,8 +182,8 @@ a.idea:hover {background: #0d0f11;}
     h3 {font-size: 1.15rem !important; padding-top: 1rem !important;}
     .stats {grid-template-columns: repeat(2, 1fr); gap: .9rem 1rem;}
     .cards {grid-template-columns: repeat(2, 1fr);}
-    a.row {grid-template-columns: 1fr 64px auto; gap: .5rem;}
-    a.row:not(.compact) > div:nth-child(2) {display: none;}  /* volume / extra detail column */
+    div.row {grid-template-columns: 1fr 64px auto; gap: .5rem;}
+    div.row:not(.compact) > div:nth-child(2) {display: none;}  /* volume / extra detail column */
     a.idea {grid-template-columns: 1fr auto; gap: .4rem .8rem;}
     a.idea > div:nth-child(2) {grid-column: 1 / -1; order: 3;}  /* check chips on their own line */
     .cal {grid-template-columns: 1fr 1fr; gap: .5rem 1rem;}
@@ -265,6 +275,10 @@ def c_held():
         except Exception:
             pass
     return [s for s in dict.fromkeys(held) if not OrderRequest(s, "buy", 1).is_option]
+@st.cache_data(ttl=10, show_spinner=False)
+def c_account(name): return c_brokers()[0][name].account()
+@st.cache_data(ttl=10, show_spinner=False)
+def c_positions(name): return c_brokers()[0][name].positions()
 @st.cache_resource(show_spinner="Connecting to brokers...")
 def c_brokers(): return connect_all()
 
@@ -326,7 +340,30 @@ ss.nav_group, ss.nav_item = group, fn
 STOCK_HEADER = group == "Stock" or fn in ("ALRT", "AI")
 
 q = None
+def prefetch(*jobs):
+    """Run cached loaders side by side so a new stock's data arrives in one wait, not one per source."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+    ctx = get_script_run_ctx()
+
+    def run(job):
+        add_script_run_ctx(ctx=ctx)  # lets the worker thread use Streamlit's caches
+        try:
+            job[0](*job[1:])
+        except Exception:
+            pass  # the screen shows the error when it asks for this again
+
+    with ThreadPoolExecutor(len(jobs)) as pool:
+        list(pool.map(run, jobs))
+
+
 if STOCK_HEADER or fn == "ORD":
+    stock_jobs = [(c_quote, sym), (c_info, sym)]
+    if fn == "DES":
+        stock_jobs += [(c_news, sym), (c_history, sym, *("1d", "5m")), (c_recs, sym)]
+    prefetch(*stock_jobs)
     try:
         q = c_quote(sym)
     except Exception:
@@ -469,14 +506,30 @@ def stock_rows(rows: list[dict], compact: bool = False) -> str:
         sub = f"<small>{r['sub']}</small>" if r.get("sub") else ""
         extra = "" if compact else f"<div class='r'>{r.get('extra', '')}</div>"
         html.append(
-            f"<a class='row{' compact' if compact else ''}' href='{link(r['symbol'])}' target='_self'>"
+            f"<div class='row{' compact' if compact else ''}'>"
             f"<div><b>{r['symbol']}</b>{sub}</div>{extra}"
             f"<div>{spark_svg(r.get('spark') or [], color, r.get('prev'), w=72 if compact else 96)}</div>"
             f"<div class='r'><b>{usd(r.get('last'))}</b><br>"
-            f"<span class='pill' style='background:{color}'>{num(pct, '{:+.2f}%')}</span></div></a>"
+            f"<span class='pill' style='background:{color}'>{num(pct, '{:+.2f}%')}</span></div></div>"
         )
-    # Wrapped in a block element so markdown passes it through as raw HTML instead of splitting the links.
+    # Wrapped in a block element so markdown passes it through as raw HTML.
     return "<div>" + "".join(html) + "</div>"
+
+
+def open_stock(symbol: str):
+    ss.ticker, ss.fn = symbol, "DES"
+    ss.pending_order = ss.ticket_symbol = None
+
+
+def nav_list(rows: list[dict], key: str, compact: bool = False):
+    """Stock rows that open the stock in place (no page reload) when clicked."""
+    with st.container(key=f"navlist_{key}"):
+        for r in rows:
+            with st.container(key=f"nav_{key}_{r['symbol']}"):
+                st.markdown(stock_rows([r], compact), unsafe_allow_html=True)
+                if st.button(f"Open {r['symbol']}", key=f"navb_{key}_{r['symbol']}"):
+                    open_stock(r["symbol"])
+                    st.rerun(scope="app")
 
 
 # ---------- screens ----------
@@ -527,19 +580,24 @@ def watch_button(where):
         st.rerun()
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def c_sentiment(symbol: str, titles: tuple) -> list:
-    return sentiment.score(symbol, list(titles))
-
-
 def news_with_sentiment(items: list[dict]):
-    """News list with a Positive / Negative / Neutral tag on each headline, scored by the AI."""
+    """News list with a Positive / Negative / Neutral tag on each headline, scored by the AI.
+
+    Scoring runs in the background (it takes a few seconds), so the headlines show straight away
+    and the tags appear once they're ready.
+    """
     scores = []
     if items and ai.provider():
-        try:
-            scores = c_sentiment(sym, tuple(n["title"] for n in items))
-        except Exception as e:
-            st.caption(f"Headline sentiment unavailable: {e}")
+        titles = [n["title"] for n in items]
+        key = "sent-" + hashlib.md5((sym + "|".join(titles)).encode()).hexdigest()[:12]
+        job = lambda: sentiment.score(sym, titles)
+        scores, _, running, err = cache.get(key, job, 6 * 3600)
+        scores = scores or []
+        if not scores and running:
+            st.caption("Rating headlines…")
+            wait_for(key, job, 6 * 3600)
+        elif not scores and err:
+            st.caption(f"Headline sentiment unavailable: {err}")
     rated = [v for v in scores if v is not None]
     if rated:
         avg = sum(rated) / len(rated)
@@ -677,7 +735,7 @@ def watchlist_panel(symbols: tuple, compact: bool = False):
     if not compact:
         for r in rows:
             r["extra"] = (f"<span class='muted'>Vol</span> {big(r['volume'])}<small>Mkt cap {big(r['market_cap'])}</small>")
-    st.markdown(stock_rows(rows, compact=compact), unsafe_allow_html=True)
+    nav_list(rows, "wlc" if compact else "wl", compact=compact)
 
 
 def order_ticket(symbol_input: bool = False):
@@ -742,6 +800,7 @@ def order_ticket(symbol_input: bool = False):
                 try:
                     oid = brokers[pb].submit_order(req)
                     st.success(f"Order sent. Id {oid}")
+                    c_account.clear(); c_positions.clear()  # show the new balance straight away
                     try:
                         journal.add(pb, oid, req, unit_px, note, tags)
                     except Exception as e:
@@ -753,7 +812,7 @@ def order_ticket(symbol_input: bool = False):
                 ss.pending_order = None
                 st.rerun()
     try:
-        bp = brokers[bname].account()["buying_power"]
+        bp = c_account(bname)["buying_power"]
         st.markdown(f"<div class='muted' style='text-align:center;margin-top:.6rem'>{usd(bp)} buying power available"
                     "</div>", unsafe_allow_html=True)
     except Exception:
@@ -771,7 +830,7 @@ def size_by_risk(bname: str, side: str, entry: float):
     plan = profile.load()
     with st.expander("Size by risk"):
         try:
-            equity = brokers[bname].account()["equity"] or 0
+            equity = c_account(bname)["equity"] or 0
         except Exception:
             equity = 0
         c = st.columns(2)
@@ -1182,8 +1241,9 @@ def market_panel():
     names = {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "DIA": "Dow Jones", "IWM": "Russell 2000"}
     for r in rows:
         r["sub"] = names.get(r["symbol"], "")
-    st.markdown("<div class='box'><div class='box-title'>Market today</div>" + stock_rows(rows, compact=True)
-                + "</div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown("<div class='box-title'>Market today</div>", unsafe_allow_html=True)
+        nav_list(rows, "mkt", compact=True)
 
 
 def open_ticket(symbol: str):
@@ -1336,19 +1396,22 @@ def wait_for_scan():
 def movers(df: pd.DataFrame):
     st.subheader("Daily movers")
 
-    def cards(rows: pd.DataFrame) -> str:
-        out = []
-        for r in rows.itertuples():
+    def cards(rows: pd.DataFrame, key: str):
+        for col, r in zip(st.columns(5), rows.itertuples()):
             color = RED if r.chg_1d < 0 else GREEN
-            out.append(f"<a class='card' href='{link(r.symbol)}' target='_self'><b>{r.symbol}</b>"
-                       f"<div class='n'>{htmllib.escape(r.name)}</div><div class='p'>{usd(r.last)}</div>"
-                       f"<span class='pill' style='background:{color};margin-top:.4rem'>{r.chg_1d:+.2f}%</span></a>")
-        return "<div class='cards'>" + "".join(out) + "</div>"
+            with col, st.container(key=f"nav_{key}_{r.symbol}"):
+                st.markdown(f"<div class='card'><b>{r.symbol}</b><div class='n'>{htmllib.escape(r.name)}</div>"
+                            f"<div class='p'>{usd(r.last)}</div><span class='pill' style='background:{color};"
+                            f"margin-top:.4rem'>{r.chg_1d:+.2f}%</span></div>", unsafe_allow_html=True)
+                if st.button(f"Open {r.symbol}", key=f"navb_{key}_{r.symbol}"):
+                    open_stock(r.symbol)
+                    st.rerun()
 
     ranked = df.dropna(subset=["chg_1d"]).sort_values("chg_1d")
-    st.markdown("<div class='muted' style='margin-bottom:.5rem'>Biggest gains</div>" + cards(ranked.tail(5)[::-1])
-                + "<div class='muted' style='margin:1rem 0 .5rem'>Biggest drops</div>" + cards(ranked.head(5)),
-                unsafe_allow_html=True)
+    st.markdown("<div class='muted' style='margin-bottom:.5rem'>Biggest gains</div>", unsafe_allow_html=True)
+    cards(ranked.tail(5)[::-1], "up")
+    st.markdown("<div class='muted' style='margin:.6rem 0 .5rem'>Biggest drops</div>", unsafe_allow_html=True)
+    cards(ranked.head(5), "down")
 
 
 def sector_map(df: pd.DataFrame):
@@ -1667,7 +1730,7 @@ def brief_context() -> str:
     ctx["holdings"] = {}
     for name, b in brokers.items():
         try:
-            ctx["holdings"][name] = b.positions()
+            ctx["holdings"][name] = c_positions(name)
         except Exception:
             pass
     q_all = c_quotes(tuple(syms)) if syms else pd.DataFrame()
@@ -1789,9 +1852,8 @@ def screen_port():
     with left:
         bname = (st.segmented_control("Account", names, default=names[0], label_visibility="collapsed")
                  if len(names) > 1 else names[0]) or names[0]
-        b = brokers[bname]
         try:
-            a, positions = b.account(), b.positions()
+            a, positions = c_account(bname), c_positions(bname)
         except Exception as e:
             st.error(f"{bname}: {e}")
             return
@@ -1837,7 +1899,7 @@ def screen_port():
                     "extra": f"{usd(p.get('market_value'))}<small style='color:{RED if pl < 0 else GREEN}'>"
                              f"{usd(pl, sign=True)} total return</small>",
                 })
-            st.markdown(stock_rows(rows), unsafe_allow_html=True)
+            nav_list(rows, "pos")
             st.caption("The pill on each position is its total return since you bought it.")
         portfolio_analytics(positions, hist, rng)
         for name, err in broker_errors.items():
@@ -1976,7 +2038,7 @@ def ai_context() -> str:
     ctx["holdings"] = {}
     for name, b in brokers.items():
         try:
-            ctx["holdings"][name] = {"account": b.account(), "positions": b.positions()}
+            ctx["holdings"][name] = {"account": c_account(name), "positions": c_positions(name)}
         except Exception:
             pass
     return json.dumps(ctx, default=str)
@@ -2179,9 +2241,9 @@ def screen_gain():
 
     st.subheader("Upcoming dividends on what you hold")
     rows = []
-    for b in brokers.values():
+    for bname in brokers:
         try:
-            held = b.positions()
+            held = c_positions(bname)
         except Exception:
             continue
         for p in held:

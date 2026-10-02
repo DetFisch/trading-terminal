@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6 - 2026-10-02
+Faster screens:
+- Clicking a stock in a watchlist, the market panel, your positions or the S&P 500 movers opens it in place instead of reloading the whole app.
+- A new stock's quote, company info, news, chart and analyst data now load at the same time instead of one after another.
+- Headline sentiment is worked out in the background: the news shows straight away and the tags appear a few seconds later.
+- Account balances and positions are reused for 10 seconds instead of being fetched again on every click (refreshed right after you place an order).
+- If IB Gateway is down, screens no longer wait up to 8 seconds per click for it; the app retries every 30 seconds.
+
 ## 0.1.5 - 2026-10-02
 - **Connect Claude** (Assistant): sign in with your Claude subscription the same way the Claude Code CLI does. Ask AI, the morning brief and headline sentiment then run on your subscription. New `ai_choice` setting (auto = subscription, then Anthropic API key, then Gemini).
 - **My trading plan** (Assistant): goals, risk limits and rules, sent with every AI question along with your track record and recent journal notes.
