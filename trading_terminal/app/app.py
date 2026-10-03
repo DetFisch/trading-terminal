@@ -1857,23 +1857,69 @@ def screen_brf():
     c = st.columns([6, 1], vertical_alignment="center")
     c[0].markdown(f"<div class='tk-name'>Morning brief</div><div class='muted'>{today:%A, %B %d} · written by "
                   f"{ai.provider()} from your holdings, watchlist and today's data</div>", unsafe_allow_html=True)
-    rewrite = c[1].button("Rewrite", width="stretch")
+    jobs = brief_jobs()
+    job = jobs.get(str(today), {})
+    rewrite = c[1].button("Rewrite", width="stretch", disabled=job.get("running", False))
     st.divider()
-    if path.exists() and not rewrite:
+    if rewrite:
+        path.unlink(missing_ok=True)
+        jobs.pop(str(today), None)
+        job = {}
+    if path.exists():
         st.markdown(path.read_text(encoding="utf-8").replace("$", "\\$"))
-        st.caption(f"Written at {pd.Timestamp(path.stat().st_mtime, unit='s', tz='UTC').tz_convert('America/New_York'):%H:%M} ET. "
-                   "A new one is written the first time you open this screen each day.")
+        st.caption(f"Written at {pd.Timestamp(path.stat().st_mtime, unit='s', tz='UTC').tz_convert(LOCAL_TZ):%I:%M %p} "
+                   "Denver time. A new one is written the first time you open this screen each day.")
         return
-    with st.spinner("Gathering prices, news, earnings and insider trades for your stocks…"):
-        ctx = brief_context()
-    messages = [{"role": "user", "content": f"<context>{ctx}</context>\n\n{BRIEF_PROMPT}"}]
-    try:
-        text = st.write_stream(t.replace("$", "\\$") for t in ai.stream_answer(messages))
-    except Exception as e:
-        st.error(ai.error_text(e))
+    if job.get("error"):
+        st.error(f"The brief couldn't be written: {job['error']}")
+        if st.button("Try again"):
+            jobs.pop(str(today), None)
+            st.rerun()
         return
-    cache.DIR.mkdir(exist_ok=True)
-    path.write_text(text.replace("\\$", "$"), encoding="utf-8")
+    if not job.get("running"):
+        start_brief(str(today), path)
+    st.info("Writing today's brief in the background (about a minute). Use the rest of the app meanwhile; "
+            "it appears here when it's ready.")
+    brief_wait(str(today), path)
+
+
+@st.cache_resource
+def brief_jobs() -> dict:
+    """Shared across reruns and sessions: {date: {"running": bool, "error": str}}."""
+    return {}
+
+
+def start_brief(today: str, path):
+    """Gather the data and have the AI write the brief in a background thread, so no page waits on it."""
+    import threading
+
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+    jobs, ctx = brief_jobs(), get_script_run_ctx()
+    jobs[today] = {"running": True, "started": time.time()}
+
+    def work():
+        add_script_run_ctx(ctx=ctx)  # lets the thread use the app's caches
+        started = time.perf_counter()
+        try:
+            messages = [{"role": "user", "content": f"<context>{brief_context()}</context>\n\n{BRIEF_PROMPT}"}]
+            text = "".join(ai.stream_answer(messages))
+            cache.DIR.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            jobs[today] = {"running": False}
+        except Exception as e:
+            jobs[today] = {"running": False, "error": ai.error_text(e)}
+        log_if_slow("morning brief (background)", started)
+
+    threading.Thread(target=work, daemon=True, name=f"brief-{today}").start()
+
+
+@st.fragment(run_every=3)
+def brief_wait(today: str, path):
+    job = brief_jobs().get(today, {})
+    if path.exists() or job.get("error"):
+        st.rerun()
+    st.caption(f"Working… {int(time.time() - job.get('started', time.time()))}s")
 
 
 # Raw broker status (Alpaca snake_case, IBKR CamelCase, compared lower-case, no "_") ->

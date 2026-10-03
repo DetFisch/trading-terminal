@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.14 - 2026-10-02
+- Faster switch to the Assistant tab: the morning brief is now written in the background (about a minute) instead of holding up the page; it appears when ready, and the rest of the app stays usable meanwhile.
+- The "are you signed in to Claude" check (which starts a small program, slow on the Green) is reused for 10 minutes instead of 1.
+
 ## 0.1.13 - 2026-10-02
 - Data collection now writes to the Log tab when it starts (`[collector] storage: ...`, saying whether collection is on and, if not, which setting is missing) and whenever it can't reach your storage. Before, a refused connection was silent.
 - The Data collection screen says exactly why collection is off.

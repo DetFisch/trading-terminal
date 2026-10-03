@@ -35,8 +35,8 @@ def _env() -> dict:
     return env
 
 
-def status(max_age: float = 60) -> dict:
-    """`claude auth status` as a dict ({} if the CLI is missing or fails); cached for a minute."""
+def status(max_age: float = 600) -> dict:
+    """`claude auth status` as a dict ({} if the CLI is missing or fails); cached for 10 minutes (it starts a\n    separate program, which takes a few seconds on a small device)."""
     global _status_cache
     if time.time() - _status_cache[0] < max_age:
         return _status_cache[1]
