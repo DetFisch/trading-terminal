@@ -1011,7 +1011,24 @@ def screen_fa():
     if df.empty:
         st.info("No financial statements available for this symbol.")
         return
-    st.dataframe(df.map(big), height=680, width="stretch")
+    source = df.attrs.get("source", "Yahoo Finance")
+    # Trend of the statement's headline lines, oldest to newest
+    headline = {"income": ["Revenue", "Net income"], "balance": ["Total assets", "Total liabilities"],
+                "cashflow": ["Operating cash flow", "Free cash flow"]}[stmt]
+    shown = [r for r in headline if r in df.index]
+    if shown:
+        fig = go.Figure()
+        for row, colr in zip(shown, (ORANGE, "#8c8c8c")):
+            s = pd.to_numeric(df.loc[row], errors="coerce").iloc[::-1]
+            fig.add_trace(go.Bar(x=list(s.index), y=s.values, name=row, marker_color=colr,
+                                 hovertemplate=f"{row} %{{x}}: $%{{y:,.0f}}<extra></extra>"))
+        style_fig(fig, 260, barmode="group", legend=dict(orientation="h", y=1.15))
+        st.plotly_chart(fig, width="stretch", config=NO_TOOLBAR)
+    st.dataframe(df.map(big), height=520 if shown else 680, width="stretch")
+    st.caption(f"Source: {source}. Columns are the end date of each "
+               f"{'quarter' if quarterly else 'fiscal year'}, newest first."
+               + (" Fourth quarters are worked out as the full year minus the first three." if quarterly and
+                  source == "SEC filings" else ""))
 
 
 def screen_news():
@@ -1491,7 +1508,8 @@ def sector_map(df: pd.DataFrame):
 def screen_bt():
     c = st.columns([3, 2, 2], vertical_alignment="bottom")
     strat = c[0].selectbox("Rule", list(backtest.STRATEGIES))
-    period = c[1].segmented_control("Period", ["1y", "2y", "5y", "10y"], default="5y", key="bt_period") or "5y"
+    period = c[1].segmented_control("Period", ["1y", "2y", "5y", "10y", "max"], default="5y", key="bt_period",
+                                    format_func=lambda p: "Max" if p == "max" else p) or "5y"
     capital = c[2].number_input("Starting money ($)", min_value=100.0, value=10_000.0, step=1000.0)
     desc, params = backtest.STRATEGIES[strat]
     p = {}

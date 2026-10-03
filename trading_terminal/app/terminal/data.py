@@ -221,6 +221,18 @@ def news(symbol: str, limit: int = 20) -> list[dict]:
 
 
 def financials(symbol: str, statement: str = "income", quarterly: bool = False) -> pd.DataFrame:
+    """Statement with rows = line items, columns = period end dates. SEC filings first (about 15 years,
+    official); Yahoo (4-5 periods) for companies that don't file with the SEC."""
+    from . import sources
+
+    try:
+        df = cache.latest(f"sec-{symbol}-{statement}-{int(quarterly)}",
+                          lambda: sources.sec_statements(symbol, statement, quarterly), 24 * 3600)
+        if df is not None and not df.empty:
+            df.attrs["source"] = "SEC filings"
+            return df
+    except Exception:
+        pass
     t = yf.Ticker(symbol)
     df = {
         "income": t.quarterly_income_stmt if quarterly else t.income_stmt,

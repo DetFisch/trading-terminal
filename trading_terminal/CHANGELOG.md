@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.10 - 2026-10-02
+- **Financials** now come from companies' own SEC filings: about 15 years of annual results (Yahoo had 4) and 12 quarters, with a chart of the headline lines (revenue and net income, assets and liabilities, operating and free cash flow). Yahoo is still used for companies that don't file with the SEC.
+- **Backtest** has a new "Max" period that tests a rule on a stock's entire price history (back to 1980 for Apple), so it's tested through the 2000 and 2008 crashes too.
+
 ## 0.1.9 - 2026-10-02
 Data from official free APIs instead of Yahoo, with Yahoo kept as a backup:
 - Price charts, mini charts and the S&P 500 scan now come from Alpaca's market data (your existing keys). The S&P 500 scan takes about 10 seconds instead of about a minute. Today's chart adds the last 15 minutes from the live feed, since the free full-market data runs 15 minutes behind. The "MAX" chart range still uses Yahoo (Alpaca goes back about 10 years).

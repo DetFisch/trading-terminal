@@ -54,6 +54,134 @@ def sec_filings(symbol: str) -> pd.DataFrame:
     ]
 
 
+# Financial statements from the XBRL data in company filings. Line item -> (concept names to try,
+# in order of preference, sign). Companies switch concept names over the years, so each line merges
+# every name it has used. sign -1 turns cash outflows (reported as positive payments) negative.
+STATEMENTS = {
+    "income": {
+        "Revenue": (["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet",
+                     "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueGoodsNet",
+                     "RevenuesNetOfInterestExpense"], 1),  # last one: banks
+        "Cost of revenue": (["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"], 1),
+        "Gross profit": (["GrossProfit"], 1),
+        "Research & development": (["ResearchAndDevelopmentExpense"], 1),
+        "Selling, general & admin": (["SellingGeneralAndAdministrativeExpense"], 1),
+        "Operating income": (["OperatingIncomeLoss"], 1),
+        "Pretax income": (["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+                           "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"], 1),
+        "Income tax": (["IncomeTaxExpenseBenefit"], 1),
+        "Net income": (["NetIncomeLoss", "ProfitLoss"], 1),
+        "EPS (diluted)": (["EarningsPerShareDiluted"], 1),
+        "Diluted shares": (["WeightedAverageNumberOfDilutedSharesOutstanding"], 1),
+    },
+    "balance": {
+        "Cash & equivalents": (["CashAndCashEquivalentsAtCarryingValue",
+                                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"], 1),
+        "Short-term investments": (["MarketableSecuritiesCurrent", "ShortTermInvestments", "AvailableForSaleSecuritiesCurrent"], 1),
+        "Inventory": (["InventoryNet"], 1),
+        "Current assets": (["AssetsCurrent"], 1),
+        "Total assets": (["Assets"], 1),
+        "Current liabilities": (["LiabilitiesCurrent"], 1),
+        "Long-term debt": (["LongTermDebtNoncurrent", "LongTermDebt"], 1),
+        "Total liabilities": (["Liabilities"], 1),
+        "Shareholders' equity": (["StockholdersEquity",
+                                  "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"], 1),
+    },
+    "cashflow": {
+        "Operating cash flow": (["NetCashProvidedByUsedInOperatingActivities",
+                                 "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], 1),
+        "Capital expenditure": (["PaymentsToAcquirePropertyPlantAndEquipment"], -1),
+        "Investing cash flow": (["NetCashProvidedByUsedInInvestingActivities"], 1),
+        "Financing cash flow": (["NetCashProvidedByUsedInFinancingActivities"], 1),
+        "Dividends paid": (["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], -1),
+        "Share buybacks": (["PaymentsForRepurchaseOfCommonStock"], -1),
+        "Stock-based compensation": (["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], 1),
+    },
+}
+INSTANT = {"balance"}  # balance-sheet items are a value on a date, not over a period
+
+
+def sec_facts(symbol: str) -> dict:
+    """All XBRL facts a company has filed (us-gaap), or {} if it isn't an SEC filer."""
+    cik = _cik_map().get(symbol.upper().replace(".", "-"))
+    if cik is None:
+        return {}
+    j = _get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json", headers=_sec_headers()).json()
+    return j.get("facts", {}).get("us-gaap", {})
+
+
+def _series(facts: dict, concepts: list[str], instant: bool, quarterly: bool) -> dict:
+    """{period end date: value} for one line item, merging its concept names (earlier names win ties)."""
+    out: dict = {}
+    for concept in concepts:
+        units = facts.get(concept, {}).get("units", {})
+        rows = next((units[u] for u in ("USD", "USD/shares", "shares") if u in units), [])
+        best: dict = {}  # end date -> (filed, value): keep the latest filing (it includes restatements)
+        quarters, years = {}, {}
+        for f in rows:
+            end, filed = f.get("end"), f.get("filed", "")
+            if instant:
+                if "start" in f or (not quarterly and f.get("form") not in ("10-K", "10-K/A")):
+                    continue
+                if end not in best or filed > best[end][0]:
+                    best[end] = (filed, f["val"])
+                continue
+            if "start" not in f:
+                continue
+            days = (pd.Timestamp(end) - pd.Timestamp(f["start"])).days
+            bucket = years if 330 <= days <= 400 else quarters if 80 <= days <= 100 else None
+            if bucket is None:
+                continue
+            key = (f["start"], end)
+            if key not in bucket or filed > bucket[key][0]:
+                bucket[key] = (filed, f["val"])
+        if not instant:
+            if not quarterly:
+                best = {e: v for (s, e), v in years.items()}
+            else:
+                best = {e: v for (s, e), v in quarters.items()}
+                # The fourth quarter is rarely reported alone: work it out as the year minus Q1-Q3.
+                for (ys, ye), (filed, total) in years.items():
+                    if ye in best:
+                        continue
+                    inside = [v for (s, e), (_, v) in quarters.items() if s >= ys and e < ye]
+                    if len(inside) == 3:
+                        best[ye] = (filed, total - sum(inside))
+        for end, (_, val) in best.items():
+            out.setdefault(end, val)
+    return out
+
+
+def sec_statements(symbol: str, statement: str = "income", quarterly: bool = False, periods: int | None = None) -> pd.DataFrame:
+    """A statement as rows = line items, columns = period end dates (newest first), like Yahoo's."""
+    facts = sec_facts(symbol)
+    if not facts:
+        return pd.DataFrame()
+    instant = statement in INSTANT
+    lines = {}
+    for label, (concepts, sign) in STATEMENTS[statement].items():
+        s = _series(facts, concepts, instant, quarterly)
+        if s:
+            lines[label] = {k: v * sign for k, v in s.items()}
+    if statement == "cashflow" and "Operating cash flow" in lines:
+        capex = lines.get("Capital expenditure", {})
+        lines["Free cash flow"] = {d: v + capex.get(d, 0) for d, v in lines["Operating cash flow"].items()}
+    if statement == "income" and "Gross profit" not in lines and {"Revenue", "Cost of revenue"} <= set(lines):
+        lines["Gross profit"] = {d: v - lines["Cost of revenue"][d] for d, v in lines["Revenue"].items()
+                                 if d in lines["Cost of revenue"]}
+    df = pd.DataFrame(lines).T
+    if df.empty:
+        return df
+    df = df[sorted(df.columns, reverse=True)]
+    # Keep columns where the headline line is reported (avoids stray dates from one-off filings).
+    anchor = {"income": "Revenue", "balance": "Total assets", "cashflow": "Operating cash flow"}[statement]
+    if anchor in df.index:
+        df = df.loc[:, df.loc[anchor].notna()]
+    order = [k for k in [*STATEMENTS[statement], "Free cash flow"] if k in df.index]
+    df = df.loc[order]
+    return df.iloc[:, : (periods or (12 if quarterly else 15))]
+
+
 # ---------- FRED (free key) ----------
 FRED_SERIES = {
     "Fed funds rate": "DFF",
