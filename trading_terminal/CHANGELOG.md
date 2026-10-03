@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12 - 2026-10-02
+- Fixed: uploads to Backblaze B2 (and other S3-compatible storage) could be refused because the storage library added checksum headers those services don't accept.
+- New **Test connection** button on Assistant > Data collection: saves and reads back a tiny file and shows the exact error if the storage refuses.
+
 ## 0.1.11 - 2026-10-02
 - **Data collection** (Assistant > Data collection): after each market close, saves daily price history for the S&P 500 and your stocks (back to 1980 where available), minute prices, daily statistics snapshots, SEC financial statements (weekly) and news with sentiment to **your own storage**: an S3-compatible bucket (Cloudflare R2, Backblaze B2, or a NAS) or a network folder. Nothing is stored on the Green. Off until you set `store_type` and its settings on the Configuration tab.
 - Charts and backtests read daily prices from your collection first (instant, and long history no longer depends on Yahoo). A split or dividend that re-adjusts past prices is detected and that stock's history is rebuilt.

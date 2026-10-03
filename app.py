@@ -5,6 +5,7 @@ import functools
 import hashlib
 import html as htmllib
 import json
+import os
 import sys
 import time
 
@@ -2467,11 +2468,26 @@ weekday at about 4:35 PM New York time (2:35 PM Denver).
     s = collector.status
     if s["running"]:
         st.info(f"Collecting now: {s['job'] or 'starting'} · {s['detail']}")
-    c = st.columns([1, 3])
+    c = st.columns([1, 1, 3])
     if c[0].button("Run now", disabled=s["running"], help="Collect today's data now instead of waiting for the "
                                                           "after-close run"):
         collector.run_now()
         st.rerun()
+    if c[1].button("Test connection", help="Save and read back a tiny test file"):
+        try:
+            stamp = pd.Timestamp.now(tz="UTC").isoformat()
+            store.write_json("collector/connection-test.json", {"checked": stamp})
+            back = store._backend().get("collector/connection-test.json")
+            if back and stamp in back.decode():
+                st.success("Connection works: a test file was saved and read back. Look for a "
+                           f"\"{os.getenv('S3_PREFIX', 'trading-terminal/')}collector\" folder in your bucket.")
+            else:
+                st.error("Saved a test file but couldn't read it back. Check the key has read access too.")
+        except Exception as e:
+            st.error(f"Storage refused the test: {type(e).__name__}: {e}")
+            st.caption("Common causes: the key's ID and secret swapped or mistyped, the key not allowed to use this "
+                       "bucket, the bucket name not matching exactly, or the endpoint's region not matching the "
+                       "bucket's.")
     if s["last_error"]:
         st.warning(f"Last problem: {s['last_error']}")
     names = {"daily_prices": "Daily prices", "minute_prices": "Minute prices", "stats": "Key statistics",

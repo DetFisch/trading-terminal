@@ -86,7 +86,11 @@ class _S3:
             aws_access_key_id=os.environ["S3_ACCESS_KEY"].strip(),
             aws_secret_access_key=os.environ["S3_SECRET_KEY"].strip(),
             region_name=os.getenv("S3_REGION", "auto").strip() or "auto",
-            config=Config(retries={"max_attempts": 4, "mode": "standard"}, connect_timeout=10, read_timeout=60),
+            # boto3 >= 1.36 adds checksum headers to every upload by default; S3-compatible services
+            # such as Backblaze B2 can reject them, so only send them when an operation requires it.
+            config=Config(retries={"max_attempts": 4, "mode": "standard"}, connect_timeout=10, read_timeout=60,
+                          request_checksum_calculation="when_required",
+                          response_checksum_validation="when_required"),
         )
 
     def get(self, key: str) -> bytes | None:
