@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.13 - 2026-10-02
+- Data collection now writes to the Log tab when it starts (`[collector] storage: ...`, saying whether collection is on and, if not, which setting is missing) and whenever it can't reach your storage. Before, a refused connection was silent.
+- The Data collection screen says exactly why collection is off.
+- Note: the collector starts the first time the app is opened after the add-on starts.
+
 ## 0.1.12 - 2026-10-02
 - Fixed: uploads to Backblaze B2 (and other S3-compatible storage) could be refused because the storage library added checksum headers those services don't accept.
 - New **Test connection** button on Assistant > Data collection: saves and reads back a tiny file and shows the exact error if the storage refuses.

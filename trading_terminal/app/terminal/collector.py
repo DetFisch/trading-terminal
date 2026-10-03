@@ -333,6 +333,7 @@ def run_all(force: bool = False) -> None:
 
 def _loop() -> None:
     time.sleep(60)  # let the app finish starting
+    log("checking whether a collection run is due")
     while True:
         try:
             if store.enabled():
@@ -344,7 +345,8 @@ def _loop() -> None:
                 if never_ran or (after_close and not done_today):
                     run_all()
         except Exception as e:
-            status["last_error"] = str(e)
+            status["last_error"] = f"{type(e).__name__}: {e}"
+            log(f"couldn't reach storage: {status['last_error']}")
         time.sleep(600)
 
 
@@ -352,6 +354,7 @@ def start() -> None:
     """Start the collector thread once per process (safe to call on every page load)."""
     if any(t.name == THREAD_NAME for t in threading.enumerate()):
         return
+    log(f"storage: {store.describe()}" + ("" if store.enabled() else f" - collection is off ({store.why_off()})"))
     threading.Thread(target=_loop, daemon=True, name=THREAD_NAME).start()
 
 

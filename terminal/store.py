@@ -40,6 +40,20 @@ def _configured() -> bool:
     return False
 
 
+def why_off() -> str:
+    """Plain reason collection is off, naming the missing settings (never their values)."""
+    k = kind()
+    if k == "off":
+        return "store_type is 'off'; set it to 's3' or 'folder'"
+    if k == "folder":
+        return "store_path is empty" if not os.getenv("STORE_PATH", "").strip() else "folder settings look fine"
+    if k == "s3":
+        missing = [k.lower() for k in ("S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY")
+                   if not os.getenv(k, "").strip()]
+        return f"missing: {', '.join(missing)}" if missing else "s3 settings look complete"
+    return f"unknown store_type '{k}'"
+
+
 def describe() -> str:
     if kind() == "folder":
         return f"folder {os.getenv('STORE_PATH')}"

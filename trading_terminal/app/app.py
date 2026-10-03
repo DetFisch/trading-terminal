@@ -2451,7 +2451,7 @@ def screen_data():
                 "charts and backtests read your copy and nothing piles up on the Green.</div>", unsafe_allow_html=True)
     st.write("")
     if not store.enabled():
-        st.info("Collection is off: no storage is set up yet.")
+        st.info(f"Collection is off: {store.why_off()}.")
         st.markdown("""
 **To turn it on (Home Assistant):** open the Trading Terminal add-on's **Configuration** tab and either
 
