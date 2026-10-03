@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 - 2026-10-02
+Faster clicks:
+- Live sections redraw less often, so clicks don't queue behind them: price header every 3 s (was 1 s), watchlist every 5 s (was 2 s), market panel every 15 s (was 5 s), alerts every 30 s.
+- Watchlist quotes, mini charts and the earnings-reminder dates show the last saved copy instantly and refresh in the background, instead of making a page wait while they reload.
+- Speed log: anything taking over a second is written to this add-on's Log tab as `[speed] ... took N s`, to pin down what's slow.
+
 ## 0.1.7 - 2026-10-02
 - Fixed: the section bar (Home, Stock, Market, Assistant) and screen buttons at the top were invisible in 0.1.6, so you couldn't move between screens.
 

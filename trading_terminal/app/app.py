@@ -1,9 +1,11 @@
 """Trading terminal. Run with:  .venv\\Scripts\\streamlit run app.py"""
 from __future__ import annotations
 
+import functools
 import hashlib
 import html as htmllib
 import json
+import sys
 import time
 
 import pandas as pd
@@ -15,6 +17,29 @@ from terminal import (ai, alerts, backtest, cache, claude_code, config, data, ga
                       profile, sentiment, sources, stream, watchlists)
 from terminal import indicators as ind
 from terminal.brokers import OrderRequest, connect_all
+
+PAGE_STARTED = time.perf_counter()
+SLOW_SECONDS = 1.0  # anything slower is written to the log (the add-on's Log tab in Home Assistant)
+
+
+def log_if_slow(what: str, started: float):
+    took = time.perf_counter() - started
+    if took >= SLOW_SECONDS:
+        print(f"[speed] {what} took {took:.1f}s", file=sys.stderr, flush=True)
+
+
+def timed(what: str):
+    """Decorator: log a section's run time when it's slow."""
+    def wrap(fn):
+        @functools.wraps(fn)  # keeps each wrapped section's own identity (Streamlit keys fragments on it)
+        def run(*args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                log_if_slow(what, started)
+        return run
+    return wrap
 
 # Sections and their screens. The codes also work typed into the search box ("NVDA GP").
 NAV = {
@@ -208,10 +233,12 @@ ss.setdefault("chat_api", [])  # full message history sent to Claude
 
 
 # ---------- cached data ----------
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)  # live price is laid over this every few seconds
 def c_quote(s): return data.quote(s)
-@st.cache_data(ttl=30, show_spinner=False)
-def c_quotes(syms): return data.quotes(list(syms))
+def _syms_key(prefix, syms): return prefix + hashlib.md5(",".join(syms).encode()).hexdigest()[:12]
+def c_quotes(syms):
+    """Quotes for a list; the last saved copy shows instantly and refreshes in the background."""
+    return cache.latest(_syms_key("quotes-", syms), lambda: data.quotes(list(syms)), 120)
 @st.cache_data(ttl=300, show_spinner=False)
 def c_history(s, period, interval): return data.history(s, period, interval)
 @st.cache_data(ttl=900, show_spinner=False)
@@ -240,8 +267,8 @@ def c_fred(series_id): return sources.fred_series(series_id)
 def c_expiries(s): return data.option_expirations(s)
 @st.cache_data(ttl=60, show_spinner=False)
 def c_chain(s, expiry): return data.option_chain(s, expiry)
-@st.cache_data(ttl=60, show_spinner=False)
-def c_sparks(syms): return data.sparklines(list(syms))
+def c_sparks(syms):
+    return cache.latest(_syms_key("sparks-", syms), lambda: data.sparklines(list(syms)), 300)
 @st.cache_data(ttl=60, show_spinner=False)
 def c_port_history(broker_name, period): return c_brokers()[0][broker_name].portfolio_history(period)
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
@@ -406,7 +433,8 @@ def stream_badge() -> str:
     return f"<span title='{why}'><span class='dot' style='background:{color}'></span>{label}</span>"
 
 
-@st.fragment(run_every=1)
+@st.fragment(run_every=3)
+@timed("price header")
 def live_header(base: dict, name: str):
     """Name, price and today's move; redrawn every second from the background price stream."""
     q = data.with_live(base)
@@ -422,7 +450,8 @@ def live_header(base: dict, name: str):
     )
 
 
-@st.fragment(run_every=15)
+@st.fragment(run_every=30)
+@timed("alert check")
 def alert_watch():
     for a in alerts.check():
         st.toast(f"ALERT: {a['symbol']} is {a['direction']} {a['price']:,.2f} (now {a['triggered']:,.2f})", icon="🔔")
@@ -729,7 +758,8 @@ def watch_data(symbols: tuple) -> list[dict]:
     return rows
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
+@timed("watchlist")
 def watchlist_panel(symbols: tuple, compact: bool = False):
     rows = watch_data(symbols)
     if not compact:
@@ -1234,7 +1264,8 @@ def screen_mon():
         market_panel()
 
 
-@st.fragment(run_every=5)
+@st.fragment(run_every=15)
+@timed("market panel")
 def market_panel():
     """Index ETFs as a quick market read, Robinhood-card style."""
     rows = watch_data(("SPY", "QQQ", "DIA", "IWM"))
@@ -1620,7 +1651,10 @@ def earnings_reminders():
     if not config.FINNHUB_API_KEY:
         return
     held, watch = my_symbols()
-    up = c_upcoming(tuple(held + watch))
+    # Never make a page wait for this: use the saved copy, fetched in the background when missing.
+    up = cache.get(_syms_key("upcoming-", held + watch), lambda: sources.upcoming_earnings(held + watch), 6 * 3600)[0]
+    if up is None:
+        return
     shown = ss.setdefault("reminded", set())
     hours = {"bmo": "before the open", "amc": "after the close"}
     for r in up.itertuples() if not up.empty else []:
@@ -1975,7 +2009,8 @@ def screen_ord():
         orders_panel()
 
 
-@st.fragment(run_every=3)
+@st.fragment(run_every=5)
+@timed("orders list")
 def orders_panel():
     """Order list; re-asks each broker for statuses every few seconds."""
     for name, b in brokers.items():
@@ -2381,3 +2416,4 @@ def screen_help():
  "AI": screen_ai, "HELP": screen_help, "BT": screen_bt, "IDEA": screen_idea, "CAL": screen_cal, "PRED": screen_pred,
  "BRF": screen_brf, "JRNL": screen_jrnl, "GAIN": screen_gain, "PLAN": screen_plan, "CLD": screen_cld}[fn]()
 earnings_reminders()  # last, so its first (slower) data fetch never holds up the screen
+log_if_slow(f"page {fn} ({FUNCTIONS.get(fn, fn)}, {sym})", PAGE_STARTED)

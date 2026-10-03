@@ -33,18 +33,33 @@ def _load(key: str):
 
 def _refresh(key: str, fn: Callable[[], Any]) -> None:
     try:
-        value = fn()
-        DIR.mkdir(exist_ok=True)
-        tmp = _path(key).with_suffix(".tmp")
-        with open(tmp, "wb") as f:
-            pickle.dump((time.time(), value), f)
-        tmp.replace(_path(key))
+        _store(key, fn())
         _errors.pop(key, None)
     except Exception as e:
         _errors[key] = str(e)
     finally:
         with _lock:
             _running.discard(key)
+
+
+def latest(key: str, fn: Callable[[], Any], max_age: float):
+    """The saved value straight away, refreshed in the background once it is older than max_age.
+    Only the very first call (nothing saved yet) waits for fn."""
+    saved = _load(key)
+    if saved is None:
+        value = fn()
+        _store(key, value)
+        return value
+    get(key, fn, max_age)  # starts a background refresh if it's stale
+    return saved[1]
+
+
+def _store(key: str, value) -> None:
+    DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _path(key).with_suffix(f".{threading.get_ident()}.tmp")
+    with open(tmp, "wb") as f:
+        pickle.dump((time.time(), value), f)
+    tmp.replace(_path(key))
 
 
 def get(key: str, fn: Callable[[], Any], max_age: float):
