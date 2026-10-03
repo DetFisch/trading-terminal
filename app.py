@@ -103,14 +103,14 @@ hr {border-color: #1e2124 !important; margin: .4rem 0 1rem !important;}
 
 /* In-app links: a stock row or card with an invisible button laid over it, so a click opens the
    stock without reloading the page */
-[class*="st-key-navlist_"], [class*="st-key-navlist_"] [data-testid="stVerticalBlock"] {gap: 0 !important;}
-[class*="st-key-nav_"] {position: relative;}
-[class*="st-key-nav_"] [data-testid="stElementContainer"]:has(button) {position: absolute; inset: 0; z-index: 2; margin: 0;
+[class*="st-key-golist_"], [class*="st-key-golist_"] [data-testid="stVerticalBlock"] {gap: 0 !important;}
+[class*="st-key-goto_"] {position: relative;}
+[class*="st-key-goto_"] [data-testid="stElementContainer"]:has(button) {position: absolute; inset: 0; z-index: 2; margin: 0;
     width: 100% !important; height: 100% !important; max-width: none !important;}
-[class*="st-key-nav_"] [data-testid="stMarkdownContainer"], [class*="st-key-nav_"] [data-testid="stMarkdown"] {margin-bottom: 0 !important;}
-[class*="st-key-nav_"] [data-testid="stButton"], [class*="st-key-nav_"] button {width: 100% !important; height: 100% !important;}
-[class*="st-key-nav_"] button {opacity: 0; cursor: pointer;}
-[class*="st-key-nav_"]:hover div.row, [class*="st-key-nav_"]:hover div.card {background: #0d0f11;}
+[class*="st-key-goto_"] [data-testid="stMarkdownContainer"], [class*="st-key-goto_"] [data-testid="stMarkdown"] {margin-bottom: 0 !important;}
+[class*="st-key-goto_"] [data-testid="stButton"], [class*="st-key-goto_"] button {width: 100% !important; height: 100% !important;}
+[class*="st-key-goto_"] button {opacity: 0; cursor: pointer;}
+[class*="st-key-goto_"]:hover div.row, [class*="st-key-goto_"]:hover div.card {background: #0d0f11;}
 /* Lists: watchlist, positions, movers */
 div.row {display: grid; grid-template-columns: 1.2fr 1fr 96px 1fr; align-items: center; gap: .8rem;
     padding: .75rem .2rem; border-bottom: 1px solid #1e2124; color: #fff !important; text-decoration: none !important;}
@@ -523,11 +523,11 @@ def open_stock(symbol: str):
 
 def nav_list(rows: list[dict], key: str, compact: bool = False):
     """Stock rows that open the stock in place (no page reload) when clicked."""
-    with st.container(key=f"navlist_{key}"):
+    with st.container(key=f"golist_{key}"):
         for r in rows:
-            with st.container(key=f"nav_{key}_{r['symbol']}"):
+            with st.container(key=f"goto_{key}_{r['symbol']}"):
                 st.markdown(stock_rows([r], compact), unsafe_allow_html=True)
-                if st.button(f"Open {r['symbol']}", key=f"navb_{key}_{r['symbol']}"):
+                if st.button(f"Open {r['symbol']}", key=f"gobtn_{key}_{r['symbol']}"):
                     open_stock(r["symbol"])
                     st.rerun(scope="app")
 
@@ -1399,11 +1399,11 @@ def movers(df: pd.DataFrame):
     def cards(rows: pd.DataFrame, key: str):
         for col, r in zip(st.columns(5), rows.itertuples()):
             color = RED if r.chg_1d < 0 else GREEN
-            with col, st.container(key=f"nav_{key}_{r.symbol}"):
+            with col, st.container(key=f"goto_{key}_{r.symbol}"):
                 st.markdown(f"<div class='card'><b>{r.symbol}</b><div class='n'>{htmllib.escape(r.name)}</div>"
                             f"<div class='p'>{usd(r.last)}</div><span class='pill' style='background:{color};"
                             f"margin-top:.4rem'>{r.chg_1d:+.2f}%</span></div>", unsafe_allow_html=True)
-                if st.button(f"Open {r.symbol}", key=f"navb_{key}_{r.symbol}"):
+                if st.button(f"Open {r.symbol}", key=f"gobtn_{key}_{r.symbol}"):
                     open_stock(r.symbol)
                     st.rerun()
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.7 - 2026-10-02
+- Fixed: the section bar (Home, Stock, Market, Assistant) and screen buttons at the top were invisible in 0.1.6, so you couldn't move between screens.
+
 ## 0.1.6 - 2026-10-02
 Faster screens:
 - Clicking a stock in a watchlist, the market panel, your positions or the S&P 500 movers opens it in place instead of reloading the whole app.
