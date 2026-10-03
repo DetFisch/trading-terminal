@@ -10,3 +10,5 @@ mcp>=2.2
 python-dotenv
 requests
 lxml
+pyarrow
+boto3

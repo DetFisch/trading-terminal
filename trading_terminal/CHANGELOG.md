@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.11 - 2026-10-02
+- **Data collection** (Assistant > Data collection): after each market close, saves daily price history for the S&P 500 and your stocks (back to 1980 where available), minute prices, daily statistics snapshots, SEC financial statements (weekly) and news with sentiment to **your own storage**: an S3-compatible bucket (Cloudflare R2, Backblaze B2, or a NAS) or a network folder. Nothing is stored on the Green. Off until you set `store_type` and its settings on the Configuration tab.
+- Charts and backtests read daily prices from your collection first (instant, and long history no longer depends on Yahoo). A split or dividend that re-adjusts past prices is detected and that stock's history is rebuilt.
+- New settings: `store_type`, `store_path`, `s3_endpoint`, `s3_bucket`, `s3_access_key`, `s3_secret_key`, `s3_prefix`, `s3_region`, `minute_backfill_days`.
+- This update installs two new libraries, so it takes longer to build than the last few.
+
 ## 0.1.10 - 2026-10-02
 - **Financials** now come from companies' own SEC filings: about 15 years of annual results (Yahoo had 4) and 12 quarters, with a chart of the headline lines (revenue and net income, assets and liabilities, operating and free cash flow). Yahoo is still used for companies that don't file with the SEC.
 - **Backtest** has a new "Max" period that tests a rule on a stock's entire price history (back to 1980 for Apple), so it's tested through the 2000 and 2008 crashes too.

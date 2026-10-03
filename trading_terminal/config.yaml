@@ -1,5 +1,5 @@
 name: Trading Terminal
-version: "0.1.10"
+version: "0.1.11"
 slug: trading_terminal
 description: Market data, research and paper/live trading through Alpaca and Interactive Brokers
 arch:
@@ -8,6 +8,10 @@ arch:
 init: false
 startup: application
 boot: auto
+# /share can be pointed at a NAS or PC (Settings > System > Storage > Add network storage, usage Share)
+# and used as store_type: folder, store_path: /share/trading_terminal
+map:
+  - share:rw
 # Shown in the Home Assistant sidebar, behind Home Assistant's own login
 ingress: true
 ingress_port: 8501
@@ -29,6 +33,11 @@ options:
   # empty to follow trading_mode: 4004 for paper, 4003 for live.
   ibkr_host: e8950327-ib-gateway
   ibkr_client_id: 17
+  # Data collection (Assistant > Data collection). off until you choose s3 (Cloudflare R2, Backblaze B2,
+  # a NAS with S3) or folder (network share). Nothing is collected while it's off.
+  store_type: "off"
+  s3_prefix: trading-terminal/
+  minute_backfill_days: 365
 schema:
   trading_mode: list(paper|live)
   ai_choice: list(auto|claude_code|claude|gemini)
@@ -47,3 +56,12 @@ schema:
   ibkr_host: str
   ibkr_port: port?
   ibkr_client_id: int
+  store_type: list(off|s3|folder)
+  store_path: str?
+  s3_endpoint: url?
+  s3_bucket: str?
+  s3_access_key: password?
+  s3_secret_key: password?
+  s3_prefix: str?
+  s3_region: str?
+  minute_backfill_days: int(0,3650)

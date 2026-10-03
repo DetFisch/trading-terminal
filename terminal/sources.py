@@ -152,9 +152,11 @@ def _series(facts: dict, concepts: list[str], instant: bool, quarterly: bool) ->
     return out
 
 
-def sec_statements(symbol: str, statement: str = "income", quarterly: bool = False, periods: int | None = None) -> pd.DataFrame:
-    """A statement as rows = line items, columns = period end dates (newest first), like Yahoo's."""
-    facts = sec_facts(symbol)
+def sec_statements(symbol: str, statement: str = "income", quarterly: bool = False, periods: int | None = None,
+                   facts: dict | None = None) -> pd.DataFrame:
+    """A statement as rows = line items, columns = period end dates (newest first), like Yahoo's.
+    Pass `facts` (from sec_facts) to build several statements from one download."""
+    facts = sec_facts(symbol) if facts is None else facts
     if not facts:
         return pd.DataFrame()
     instant = statement in INSTANT

@@ -10,7 +10,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-from . import cache, config, market, stream
+from . import cache, config, market, store, stream
 
 SCREENS = {
     "Most active": "most_actives",
@@ -182,11 +182,46 @@ def quotes(symbols: list[str]) -> pd.DataFrame:
 
 
 def history(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
-    df = market.history(symbol, period, interval)  # Alpaca first: official and quick
+    if interval == "1d" and store.enabled():  # your own collected history first (see collector.py)
+        df = _stored_daily(symbol, period)
+        if df is not None:
+            return df
+    df = market.history(symbol, period, interval)  # Alpaca: official and quick
     if not df.empty:
         return df
     df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
     return df[["Open", "High", "Low", "Close", "Volume"]] if not df.empty else df
+
+
+PERIOD_DAYS = {"5d": 7, "1mo": 31, "3mo": 92, "6mo": 183, "1y": 366, "2y": 731, "5y": 1827, "10y": 3653}
+
+
+def _stored_daily(symbol: str, period: str) -> pd.DataFrame | None:
+    """Daily bars from the collected store, topped up with the days since the last collection.
+    None when the store doesn't cover the requested period (the caller then asks Alpaca/Yahoo)."""
+    try:
+        df = store.read(f"prices/daily/{symbol}.parquet")
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    now = pd.Timestamp.now(tz="America/New_York")
+    if period == "ytd":
+        start = pd.Timestamp(now.year, 1, 1, tz="America/New_York")
+    elif period == "max":
+        start = df.index.min()
+    elif period in PERIOD_DAYS:
+        start = now - pd.Timedelta(days=PERIOD_DAYS[period])
+    else:
+        return None
+    if df.index.min() > start + pd.Timedelta(days=7):  # store doesn't go back far enough
+        return None
+    if (now.normalize() - df.index.max()).days >= 1:  # add days since the last collection
+        recent = market.history(symbol, "1mo", "1d")
+        if not recent.empty:
+            recent.index = recent.index.normalize()
+            df = pd.concat([df, recent[recent.index > df.index.max()]])
+    return df[df.index >= start]
 
 
 def info(symbol: str) -> dict:

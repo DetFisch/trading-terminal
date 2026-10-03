@@ -13,8 +13,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from terminal import (ai, alerts, backtest, cache, claude_code, config, data, gains, ideas, journal, predictions,
-                      profile, sentiment, sources, stream, watchlists)
+from terminal import (ai, alerts, backtest, cache, claude_code, collector, config, data, gains, ideas, journal,
+                      predictions, profile, sentiment, sources, store, stream, watchlists)
 from terminal import indicators as ind
 from terminal.brokers import OrderRequest, connect_all
 
@@ -49,7 +49,7 @@ NAV = {
               "BT": "Backtest"},
     "Market": {"MON": "Watchlist", "SPX": "S&P 500", "IDEA": "Ideas", "CAL": "Earnings calendar",
                "PRED": "Predictions", "SCR": "Screens", "ECO": "Economy"},
-    "Assistant": {"BRF": "Morning brief", "AI": "Ask AI", "PLAN": "My trading plan", "CLD": "Connect Claude",
+    "Assistant": {"BRF": "Morning brief", "AI": "Ask AI", "PLAN": "My trading plan", "CLD": "Connect Claude", "DATA": "Data collection",
                   "HELP": "Shortcuts"},
 }
 HOME = "PORT"  # first screen, like Robinhood's home: account value, positions, watchlist
@@ -222,6 +222,7 @@ a.idea:hover {background: #0d0f11;}
 st.markdown(CSS, unsafe_allow_html=True)
 
 stream.start()  # background price stream; no-op if already running or Alpaca is not configured
+collector.start()  # daily data collection; does nothing until storage is set up (Assistant > Data collection)
 
 ss = st.session_state
 ss.setdefault("ticker", "AAPL")
@@ -301,7 +302,9 @@ def c_held():
             held += [p["symbol"] for p in b.positions()]
         except Exception:
             pass
-    return [s for s in dict.fromkeys(held) if not OrderRequest(s, "buy", 1).is_option]
+    stocks = [s for s in dict.fromkeys(held) if not OrderRequest(s, "buy", 1).is_option]
+    collector.note_symbols(stocks)  # so the collector saves data for what you own
+    return stocks
 @st.cache_data(ttl=10, show_spinner=False)
 def c_account(name): return c_brokers()[0][name].account()
 @st.cache_data(ttl=10, show_spinner=False)
@@ -642,6 +645,9 @@ def news_with_sentiment(items: list[dict]):
         job = lambda: sentiment.score(sym, titles)
         scores, _, running, err = cache.get(key, job, 6 * 3600)
         scores = scores or []
+        if scores and not ss.setdefault("sent_saved", set()) >= {key}:  # archive once per set
+            collector.record_sentiment(sym, titles, scores)
+            ss.sent_saved.add(key)
         if not scores and running:
             st.caption("Rating headlines…")
             wait_for(key, job, 6 * 3600)
@@ -2438,6 +2444,62 @@ def login_steps(login):
         st.warning("Sign-in timed out. Start again.")
 
 
+def screen_data():
+    st.markdown("<div class='tk-name'>Data collection</div><div class='muted'>After each market close the app saves "
+                "daily and minute prices, key statistics, financial statements and news to your own storage, so "
+                "charts and backtests read your copy and nothing piles up on the Green.</div>", unsafe_allow_html=True)
+    st.write("")
+    if not store.enabled():
+        st.info("Collection is off: no storage is set up yet.")
+        st.markdown("""
+**To turn it on (Home Assistant):** open the Trading Terminal add-on's **Configuration** tab and either
+
+- **Cloud bucket** (Cloudflare R2, Backblaze B2, or a NAS with S3 support): set `store_type` to `s3` and fill in
+  `s3_endpoint`, `s3_bucket`, `s3_access_key` and `s3_secret_key` from your provider, or
+- **Network folder**: add a network share in *Settings > System > Storage* (usage: Share), set `store_type` to
+  `folder` and `store_path` to `/share/trading_terminal`.
+
+Save and restart the add-on. The first run downloads the history (several minutes); after that it runs each
+weekday at about 4:35 PM New York time (2:35 PM Denver).
+""")
+        return
+    st.success(f"Saving to {store.describe()}.")
+    s = collector.status
+    if s["running"]:
+        st.info(f"Collecting now: {s['job'] or 'starting'} · {s['detail']}")
+    c = st.columns([1, 3])
+    if c[0].button("Run now", disabled=s["running"], help="Collect today's data now instead of waiting for the "
+                                                          "after-close run"):
+        collector.run_now()
+        st.rerun()
+    if s["last_error"]:
+        st.warning(f"Last problem: {s['last_error']}")
+    names = {"daily_prices": "Daily prices", "minute_prices": "Minute prices", "stats": "Key statistics",
+             "financials": "Financial statements (weekly)", "news": "News"}
+    try:
+        runs, use = collector.last_runs(), store.usage()
+    except Exception as e:
+        st.error(f"Couldn't read the storage: {e}")
+        return
+    st.subheader("Last runs")
+    rows = [{"What": names[j], "Last run": runs.get(j, {}).get("day", "never"),
+             "Result": runs.get(j, {}).get("error") or runs.get(j, {}).get("result", ""),
+             "Took": f"{runs[j]['seconds']}s" if runs.get(j, {}).get("seconds") is not None else ""}
+            for j in collector.JOBS]
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.subheader("What's stored")
+    labels = {"prices/daily": "Daily prices", "prices/minute": "Minute prices", "stats": "Statistics snapshots",
+              "financials": "Financial statements", "news": "News", "sentiment": "Headline sentiment",
+              "collector": "Collector bookkeeping"}
+    table = [{"Data": labels.get(k, k), "Files": n, "Size": f"{b / 1e6:,.1f} MB"} for k, (n, b) in use.items()]
+    st.dataframe(pd.DataFrame(table), hide_index=True, width="stretch")
+    total = sum(b for _, b in use.values())
+    own = collector.own_symbols()
+    st.caption(f"Total {total / 1e6:,.1f} MB. Collecting for the S&P 500 plus {len(own)} of your own stocks "
+               f"(watchlists and holdings); minute prices and news for your own stocks only, minute history going "
+               f"back {collector.minute_backfill_days()} days.")
+
+
 def screen_help():
     st.subheader("Keyboard shortcuts")
     st.markdown("In the search box, type a ticker, a screen code, or both, then press Enter. "
@@ -2452,6 +2514,6 @@ def screen_help():
  "ERN": screen_ern, "SEC": screen_sec, "ECO": screen_eco, "MON": screen_mon,
  "SCR": screen_scr, "SPX": screen_spx, "OMON": screen_omon, "ALRT": screen_alrt, "PORT": screen_port, "ORD": screen_ord,
  "AI": screen_ai, "HELP": screen_help, "BT": screen_bt, "IDEA": screen_idea, "CAL": screen_cal, "PRED": screen_pred,
- "BRF": screen_brf, "JRNL": screen_jrnl, "GAIN": screen_gain, "PLAN": screen_plan, "CLD": screen_cld}[fn]()
+ "BRF": screen_brf, "JRNL": screen_jrnl, "GAIN": screen_gain, "PLAN": screen_plan, "CLD": screen_cld, "DATA": screen_data}[fn]()
 earnings_reminders()  # last, so its first (slower) data fetch never holds up the screen
 log_if_slow(f"page {fn} ({FUNCTIONS.get(fn, fn)}, {sym})", PAGE_STARTED)
