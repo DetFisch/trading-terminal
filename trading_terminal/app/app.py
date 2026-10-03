@@ -582,6 +582,7 @@ def screen_des():
                 line_chart(df.Close, 330, RED if (q or {}).get("change", 0) < 0 else GREEN, (q or {}).get("prev_close"), rng)
             else:
                 line_chart(df.Close, 330, GREEN if df.Close.iloc[-1] >= df.Close.iloc[0] else RED, None, rng)
+        research_links(i)
         if not (i.get("longName") or i.get("shortName")):
             st.caption("No company profile available for this symbol.")
             return
@@ -597,6 +598,25 @@ def screen_des():
         st.write("")
         st.markdown("<div class='box-title'>Watchlist</div>", unsafe_allow_html=True)
         watchlist_panel(tuple(watchlists.symbols()), compact=True)
+
+
+def research_links(i: dict):
+    """One-click links to the same stock on popular research sites (opens a new tab)."""
+    s, etf = sym.upper(), (i.get("quoteType") == "ETF")
+    sites = [
+        ("Stock Analysis", f"https://stockanalysis.com/{'etf' if etf else 'stocks'}/{s.lower().replace('-', '.')}/"),
+        ("Seeking Alpha", f"https://seekingalpha.com/symbol/{s}"),
+        ("Google Finance", f"https://www.google.com/finance?q={s}"),
+        ("Finviz", f"https://finviz.com/quote.ashx?t={s}"),
+        ("TradingView", f"https://www.tradingview.com/symbols/{s.replace('-', '.')}/"),
+        ("Koyfin", "https://app.koyfin.com/"),
+        ("TIKR", "https://app.tikr.com/"),
+    ]
+    st.markdown("<div class='muted' style='font-size:.78rem;margin:.2rem 0 .3rem'>Research elsewhere</div>"
+                + "".join(f"<a class='chip' href='{u}' target='_blank' rel='noopener' style='background:#1e2124;"
+                          f"color:#fff;text-decoration:none'>{n} ↗</a>" for n, u in sites),
+                unsafe_allow_html=True)
+    st.caption("Koyfin and TIKR open their home page; search for the ticker there.")
 
 
 def watch_button(where):

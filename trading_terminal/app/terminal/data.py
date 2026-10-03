@@ -10,7 +10,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-from . import config, stream
+from . import cache, config, market, stream
 
 SCREENS = {
     "Most active": "most_actives",
@@ -182,17 +182,28 @@ def quotes(symbols: list[str]) -> pd.DataFrame:
 
 
 def history(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
+    df = market.history(symbol, period, interval)  # Alpaca first: official and quick
+    if not df.empty:
+        return df
     df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
     return df[["Open", "High", "Low", "Close", "Volume"]] if not df.empty else df
 
 
 def info(symbol: str) -> dict:
-    return yf.Ticker(symbol).info or {}
+    """Company profile and key statistics. Finnhub answers quickly; Yahoo's fuller (but slow) profile
+    is fetched in the background and fills in the rest (description, employees, targets...) once saved."""
+    base = cache.latest(f"fh-{symbol}", lambda: market.fundamentals(symbol), 3600) if config.FINNHUB_API_KEY else {}
+    extra = cache.get(f"yinfo-{symbol}", lambda: yf.Ticker(symbol).info or {}, 24 * 3600)[0]
+    if extra is None and not (base or {}).get("longName"):  # Finnhub has no profile (no key, or a fund)
+        extra = yf.Ticker(symbol).info or {}
+    return {**(base or {}), **{k: v for k, v in (extra or {}).items() if v not in (None, "", [])}}
 
 
 def news(symbol: str, limit: int = 20) -> list[dict]:
-    # Ticker.news currently returns nothing; the search endpoint still serves headlines.
-    items = []
+    items = market.news(symbol, limit)  # Alpaca (Benzinga) first
+    if items:
+        return items
+    # Yahoo: Ticker.news currently returns nothing; the search endpoint still serves headlines.
     for c in yf.Search(symbol, news_count=limit).news or []:
         ts = c.get("providerPublishTime")
         thumbs = (c.get("thumbnail") or {}).get("resolutions") or []
@@ -224,6 +235,9 @@ def financials(symbol: str, statement: str = "income", quarterly: bool = False) 
 
 
 def recommendations(symbol: str) -> pd.DataFrame:
+    df = market.recommendations(symbol)  # Finnhub first
+    if not df.empty:
+        return df
     df = yf.Ticker(symbol).recommendations
     return df if df is not None else pd.DataFrame()
 
@@ -231,6 +245,10 @@ def recommendations(symbol: str) -> pd.DataFrame:
 def sparklines(symbols: list[str]) -> dict[str, list[float]]:
     """Today's intraday closes per symbol (last 5 days at 30 min if today has no bars yet)."""
     out: dict[str, list[float]] = {}
+    for s, df in market.bars(list(symbols), "1d", "5m").items():  # Alpaca: all symbols in one request
+        vals = df["Close"].dropna().round(4).tolist()
+        if len(vals) > 1:
+            out[s] = vals
     for period, interval in (("1d", "5m"), ("5d", "30m")):
         need = [s for s in symbols if s not in out]
         if not need:
@@ -258,9 +276,20 @@ def sp500_scan() -> pd.DataFrame:
         ).text
         members = pd.read_html(io.StringIO(html))[0]
         members["symbol"] = members["Symbol"].str.replace(".", "-", regex=False)
-        px = yf.download(
-            list(members["symbol"]), period="1y", interval="1d", auto_adjust=True, progress=False, threads=True
-        )["Close"].dropna(axis=1, how="all").ffill()
+        symbols = list(members["symbol"])
+        got = market.bars(symbols, "1y", "1d")  # Alpaca: the whole index in a few requests
+        px = pd.DataFrame({s: b["Close"] for s, b in got.items()})
+        missing = [s for s in symbols if s not in px.columns]
+        if missing:  # anything Alpaca didn't have (or everything, without Alpaca keys) comes from Yahoo
+            extra = yf.download(missing, period="1y", interval="1d", auto_adjust=True, progress=False, threads=True)["Close"]
+            if isinstance(extra, pd.Series):
+                extra = extra.to_frame(missing[0])
+            if not px.empty:
+                extra.index = pd.DatetimeIndex(extra.index).tz_localize(px.index.tz) if extra.index.tz is None else extra.index.tz_convert(px.index.tz)
+                extra.index = extra.index.normalize()
+                px.index = px.index.normalize()
+            px = extra if px.empty else px.join(extra, how="outer")
+        px = px.sort_index().dropna(axis=1, how="all").ffill()
         try:
             fund = fundamentals.result()
         except Exception:

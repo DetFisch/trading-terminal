@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9 - 2026-10-02
+Data from official free APIs instead of Yahoo, with Yahoo kept as a backup:
+- Price charts, mini charts and the S&P 500 scan now come from Alpaca's market data (your existing keys). The S&P 500 scan takes about 10 seconds instead of about a minute. Today's chart adds the last 15 minutes from the live feed, since the free full-market data runs 15 minutes behind. The "MAX" chart range still uses Yahoo (Alpaca goes back about 10 years).
+- News comes from Alpaca's feed (Benzinga) first.
+- Company profile, key statistics and analyst ratings come from Finnhub first, so a stock you haven't opened before shows its numbers in about a second; Yahoo's fuller profile (the description, employees, price targets) fills in from the background.
+- New "Research elsewhere" links on every stock page: Stock Analysis, Seeking Alpha, Google Finance, Finviz, TradingView, plus Koyfin and TIKR.
+
 ## 0.1.8 - 2026-10-02
 Faster clicks:
 - Live sections redraw less often, so clicks don't queue behind them: price header every 3 s (was 1 s), watchlist every 5 s (was 2 s), market panel every 15 s (was 5 s), alerts every 30 s.
