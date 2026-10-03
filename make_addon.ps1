@@ -5,7 +5,7 @@ $root = $PSScriptRoot
 $dest = Join-Path $root "trading_terminal\app"
 if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
 New-Item -ItemType Directory -Path $dest | Out-Null
-Copy-Item (Join-Path $root "app.py"), (Join-Path $root "requirements.txt") $dest
+Copy-Item (Join-Path $root "app.py"), (Join-Path $root "mcp_server.py"), (Join-Path $root "requirements.txt") $dest
 Copy-Item (Join-Path $root "terminal") $dest -Recurse
 Copy-Item (Join-Path $root ".streamlit") $dest -Recurse
 Get-ChildItem $dest -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force

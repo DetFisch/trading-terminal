@@ -22,6 +22,14 @@ if not os.getenv("IBKR_PORT") and os.getenv("IBKR_HOST", "127.0.0.1") not in ("1
     os.environ["IBKR_PORT"] = "4003" if os.getenv("TRADING_MODE", "paper").lower() == "live" else "4004"
 Path(os.environ["DATA_DIR"]).mkdir(parents=True, exist_ok=True)
 
+# The read-only research tools for Claude, as an always-on local service (starting them per question would
+# take several seconds on a small device). Claude Code connects to it through TERMINAL_MCP_URL.
+import subprocess  # noqa: E402
+
+TOOLS_PORT = os.getenv("TOOLS_PORT", "8765")
+subprocess.Popen([sys.executable, "mcp_server.py", "--http", TOOLS_PORT])
+os.environ["TERMINAL_MCP_URL"] = f"http://127.0.0.1:{TOOLS_PORT}/mcp"
+
 port = os.getenv("PORT", "8501")
 os.execvp(sys.executable, [
     sys.executable, "-m", "streamlit", "run", "app.py",

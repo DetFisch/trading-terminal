@@ -20,6 +20,21 @@ from your interpretation, and lay out both the bull and the bear case with the m
 risks. Say plainly when data is missing or stale. You cannot place orders; the user \
 makes and executes every decision themselves. Write tersely, the way a terminal reads."""
 
+# Added when Claude answers through Claude Code, which has the terminal's research tools.
+TOOLS_NOTE = """
+
+You have read-only research tools from this terminal (named mcp__terminal__...): quotes and history for any \
+asset class (stocks, ETFs, indexes, futures, forex, crypto), technicals, company profiles, SEC financial \
+statements, earnings, analyst views, valuation scores, news, insider trades, SEC filing text, options chains \
+with implied volatility and expected moves, ETF holdings, an S&P 500 screener, FRED economic data, \
+prediction-market odds, backtests, and the user's own portfolio, orders, journal, gains and trading plan. Use \
+them for every figure you cite rather than memory, and say which tool or source a number came from. Pull what \
+the question actually needs: for a stock, typically quote, technicals, profile, recent financials, earnings, \
+analysts and news; for options, the chain and its implied move; for macro, the market overview and FRED. \
+Check the user's trading plan and holdings before suggesting position sizes or risk. Use web search for \
+things the tools don't cover (very recent events, commentary)."""
+
+
 GEMINI_FALLBACKS = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
 _gemini_search_ok = True
 
@@ -66,7 +81,7 @@ def stream_answer(messages: list) -> Iterator[str]:
         from . import claude_code
 
         parts = []
-        for chunk in claude_code.stream(_transcript(messages), SYSTEM):
+        for chunk in claude_code.stream(_transcript(messages), SYSTEM + TOOLS_NOTE, effort="high"):
             parts.append(chunk)
             yield chunk
         messages.append({"role": "assistant", "content": "".join(parts)})
@@ -79,6 +94,7 @@ def stream_answer(messages: list) -> Iterator[str]:
         with client.beta.messages.stream(
             model=MODEL,
             max_tokens=64000,
+            output_config={"effort": "high"},
             system=SYSTEM,
             tools=[WEB_SEARCH],
             # If the model declines a request, the API retries it on a fallback model.
@@ -141,13 +157,13 @@ def _stream_gemini(messages: list) -> Iterator[str]:
     messages.append({"role": "assistant", "content": "".join(parts)})
 
 
-def complete(prompt: str, system: str = "", max_tokens: int = 4000) -> str:
+def complete(prompt: str, system: str = "", max_tokens: int = 4000, effort: str = "high") -> str:
     """One short, non-streaming answer (for background jobs like headline sentiment)."""
     who = provider()
     if who == "Claude Code":
         from . import claude_code
 
-        return claude_code.ask(prompt, system or "Answer tersely.")
+        return claude_code.ask(prompt, system or "Answer tersely.", effort=effort, tools=False)
     if who == "Gemini":
         from google import genai
         from google.genai import types
@@ -168,7 +184,7 @@ def complete(prompt: str, system: str = "", max_tokens: int = 4000) -> str:
     if who == "Claude":
         r = anthropic.Anthropic().beta.messages.create(
             model=MODEL, max_tokens=max_tokens, system=system or anthropic.NOT_GIVEN,
-            output_config={"effort": "low"},
+            output_config={"effort": effort},
             betas=["server-side-fallback-2026-07-01"], fallbacks="default",
             messages=[{"role": "user", "content": prompt}],
         )

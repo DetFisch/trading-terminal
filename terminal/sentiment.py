@@ -22,7 +22,8 @@ def score(symbol: str, titles: list[str]) -> list[float | None]:
     if not titles:
         return []
     lines = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(titles))
-    text = ai.complete(PROMPT.format(symbol=symbol, lines=lines), SYSTEM, max_tokens=1000)
+    # Low effort: a quick good/bad/neutral read per headline, run in the background often.
+    text = ai.complete(PROMPT.format(symbol=symbol, lines=lines), SYSTEM, max_tokens=1000, effort="low")
     match = re.search(r"\[[^\[\]]*\]", text, re.S)
     try:
         values = json.loads(match.group(0)) if match else []

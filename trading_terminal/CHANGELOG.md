@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.15 - 2026-10-02
+- **Claude now has 30 read-only research tools** when it answers through your subscription (Ask AI and the morning brief). It looks up what each question needs, for any asset class: quotes and history for stocks, ETFs, indexes, futures, forex and crypto; technicals; company profiles; 15 years of SEC financial statements; earnings; analyst views; valuation scores; news; insider trades; full SEC filing text; options chains with implied volatility, expected move and put/call ratios; ETF holdings and sector weights; a market overview (indexes, futures, yields, dollar, commodities, sectors); an S&P 500 screener; any FRED economic series (searchable); prediction-market odds; backtests; and your own portfolio, orders, journal, gains and trading plan. None of the tools can trade.
+- The tools run as an always-on service inside the add-on, so they're ready instantly.
+- Effort: Ask AI and the morning brief run at **high**; headline sentiment at **low** (a quick rating that runs often in the background).
+- Gemini and an Anthropic API key still get the on-screen data bundle rather than the tools.
+
 ## 0.1.14 - 2026-10-02
 - Faster switch to the Assistant tab: the morning brief is now written in the background (about a minute) instead of holding up the page; it appears when ready, and the rest of the app stays usable meanwhile.
 - The "are you signed in to Claude" check (which starts a small program, slow on the Green) is reused for 10 minutes instead of 1.

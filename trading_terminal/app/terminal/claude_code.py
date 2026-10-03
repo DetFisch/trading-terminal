@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -109,9 +110,35 @@ class Login:
         return lines[-1] if lines else ""
 
 
-def _command(system: str, stream: bool) -> list[str]:
+MCP_NAME = "terminal"  # tools appear to Claude as mcp__terminal__get_quote etc.
+
+
+def _mcp_config() -> str | None:
+    """Path to a config connecting Claude Code to the terminal's read-only research tools (mcp_server.py):
+    the add-on's always-on server when TERMINAL_MCP_URL is set, otherwise started on demand (stdio)."""
+    url = os.getenv("TERMINAL_MCP_URL", "").strip()
+    if url:
+        server = {"type": "http", "url": url}
+    else:
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcp_server.py")
+        if not os.path.exists(script):
+            return None
+        server = {"type": "stdio", "command": sys.executable, "args": [script]}
+    path = os.path.join(_workdir(), "mcp.json")
+    with open(path, "w") as f:
+        json.dump({"mcpServers": {MCP_NAME: server}}, f)
+    return path
+
+
+def _command(system: str, stream: bool, effort: str = "high", tools: bool = True) -> list[str]:
+    allowed = list(TOOLS)
     cmd = [binary(), "-p", "--restricted", "--no-session-persistence", "--tools", *TOOLS,
-           "--allowedTools", *TOOLS, "--system-prompt", system]
+           "--system-prompt", system, "--effort", effort, "--strict-mcp-config"]
+    config = _mcp_config() if tools else None
+    if config:
+        cmd += ["--mcp-config", config]
+        allowed.append(f"mcp__{MCP_NAME}")  # every tool on the terminal server (all read-only)
+    cmd += ["--allowedTools", *allowed]
     if stream:
         cmd += ["--output-format", "stream-json", "--verbose", "--include-partial-messages"]
     else:
@@ -125,9 +152,9 @@ def _workdir() -> str:
     return d
 
 
-def ask(prompt: str, system: str, timeout: int = 300) -> str:
+def ask(prompt: str, system: str, timeout: int = 300, effort: str = "high", tools: bool = True) -> str:
     """One complete answer."""
-    p = subprocess.run(_command(system, stream=False), input=prompt, capture_output=True, text=True,
+    p = subprocess.run(_command(system, stream=False, effort=effort, tools=tools), input=prompt, capture_output=True, text=True,
                        timeout=timeout, env=_env(), cwd=_workdir())
     try:
         data = json.loads(p.stdout[p.stdout.find("{"):])
@@ -138,9 +165,9 @@ def ask(prompt: str, system: str, timeout: int = 300) -> str:
     return data.get("result") or ""
 
 
-def stream(prompt: str, system: str, timeout: int = 600) -> Iterator[str]:
-    """Yields the answer as it is written."""
-    p = subprocess.Popen(_command(system, stream=True), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+def stream(prompt: str, system: str, timeout: int = 900, effort: str = "high", tools: bool = True) -> Iterator[str]:
+    """Yields the answer as it is written (tool calls happen in between, so pauses are normal)."""
+    p = subprocess.Popen(_command(system, stream=True, effort=effort, tools=tools), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, text=True, bufsize=1, env=_env(), cwd=_workdir())
     p.stdin.write(prompt)
     p.stdin.close()
