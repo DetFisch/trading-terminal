@@ -283,12 +283,26 @@ def c_forecastex(products):
     return b.forecast_markets(list(products)) if b else ([], {})
 
 
-def c_predictions():
-    """Kalshi + Polymarket (public sites) plus IBKR ForecastEx through IB Gateway when it's connected."""
-    events, errors = c_public_predictions()
-    if "Interactive Brokers" in c_brokers()[0]:
+def c_predictions(wait: bool = False):
+    """Kalshi + Polymarket (public sites) plus IBKR ForecastEx through IB Gateway when it's connected.
+
+    Fetching these can take a minute (ForecastEx waits on IB Gateway), so by default this returns the last
+    saved odds straight away and refreshes them in the background; only the Predictions screen waits."""
+    if wait:
+        events, errors = c_public_predictions()
+    else:
+        saved, _, _, err = cache.get("predictions-public", predictions.all_events, 600)
+        events, errors = saved if saved is not None else ([], {"Prediction markets": err or "still loading"})
+    b = c_brokers()[0].get("Interactive Brokers")
+    if b:
+        codes = tuple(predictions.forecast_products())
         try:
-            fx, problems = c_forecastex(tuple(predictions.forecast_products()))
+            if wait:
+                fx, problems = c_forecastex(codes)
+            else:
+                saved, _, _, err = cache.get("predictions-fx-" + "-".join(codes),
+                                             lambda: b.forecast_markets(list(codes)), 600)
+                fx, problems = saved if saved is not None else ([], {})
             events = events + fx
             errors = {**errors, **{f"ForecastEx {k}": v for k, v in problems.items()}}
         except Exception as e:
@@ -1732,7 +1746,7 @@ def prediction_notice(errors: dict) -> str:
 
 
 def screen_pred():
-    events, errors = c_predictions()
+    events, errors = c_predictions(wait=True)  # this screen is about the odds, so it waits for fresh ones
     have_ibkr = "Interactive Brokers" in brokers
     st.markdown("<div class='tk-name'>Prediction markets</div><div class='muted'>What traders are paying for "
                 "each outcome, read as the market's odds. From Kalshi and Polymarket"
@@ -2175,30 +2189,70 @@ def screen_ai():
         st.info("Sign in under Assistant > Connect Claude, or add GEMINI_API_KEY / ANTHROPIC_API_KEY, to use the research panel, or "
                 "and connect Claude Code / Claude Desktop to this app's data instead (see README).")
         return
+    who = ai.provider()
+    with_tools = who == "Claude Code"
     c = st.columns([8, 1])
-    c[0].caption(f"{ai.provider()} sees the data on screen for {sym} plus your holdings, and can search "
-                 "the web. It cannot place orders.")
+    c[0].caption(f"{who} " + ("looks up whatever the question needs with the terminal's research tools (any stock, "
+                              "ETF, future, option, the economy, your portfolio) and can search the web."
+                              if with_tools else f"sees the data on screen for {sym} plus your holdings, and can "
+                              "search the web.") + " It cannot place orders.")
     if c[1].button("Clear"):
         ss.chat, ss.chat_api = [], []
         st.rerun()
     for role, text in ss.chat:
         st.chat_message(role).markdown(text)
-    prompt = st.chat_input(f"Ask about {sym}, your portfolio, or the market")
+    prompt = st.chat_input(f"Ask about {sym}, any market, your portfolio, or the economy")
     if not prompt:
         return
     st.chat_message("user").markdown(prompt)
     ss.chat.append(("user", prompt))
     turn_start = len(ss.chat_api)
-    ss.chat_api.append({"role": "user", "content": f"<context>{ai_context()}</context>\n\n{prompt}"})
+    started = time.perf_counter()
+    # With tools Claude fetches what it needs, so send only a light starting point; otherwise the full bundle.
+    context = light_ai_context() if with_tools else ai_context()
+    log_if_slow("Ask AI context", started)
+    ss.chat_api.append({"role": "user", "content": f"<context>{context}</context>\n\n{prompt}"})
     with st.chat_message("assistant"):
+        status = st.status("Thinking…", expanded=False) if with_tools else None
+        looked_up: list[str] = []
+
+        def on_tool(name: str):
+            looked_up.append(name.replace("get_", "").replace("_", " "))
+            if status:
+                status.update(label=f"Looking up: {', '.join(dict.fromkeys(looked_up))}…")
+
         try:
             # Escape "$" so prices are not swallowed as LaTeX math by the markdown renderer.
-            text = st.write_stream(t.replace("$", "\\$") for t in ai.stream_answer(ss.chat_api))
+            text = st.write_stream(t.replace("$", "\\$") for t in ai.stream_answer(ss.chat_api, on_tool=on_tool))
             ss.chat.append(("assistant", text))
+            if status:
+                status.update(label=f"Used {len(looked_up)} lookups: {', '.join(dict.fromkeys(looked_up)) or 'none'}",
+                              state="complete")
         except Exception as e:
             ss.chat.pop()
             del ss.chat_api[turn_start:]
+            if status:
+                status.update(label="Didn't finish", state="error")
             st.error(ai.error_text(e))
+            st.caption("Details are in the add-on's Log tab (lines starting with [claude]).")
+
+
+def light_ai_context() -> str:
+    """Starting point for Claude with tools: what's on screen and what you hold. Everything else it looks up."""
+    ctx: dict = {"screen": FUNCTIONS.get(fn, fn), "ticker_on_screen": sym, "mode": config.MODE_LABEL,
+                 "today": pd.Timestamp.now(tz=LOCAL_TZ).strftime("%A %B %d, %Y %I:%M %p Denver time")}
+    if q:
+        ctx["quote"] = {k: q.get(k) for k in ("last", "change_pct", "day_low", "day_high", "volume")}
+    ctx["holdings"] = {}
+    for name in brokers:
+        try:
+            ctx["holdings"][name] = [{k: p.get(k) for k in ("symbol", "qty", "avg_cost", "market_value", "unrealized_pl")}
+                                     for p in c_positions(name)]
+        except Exception:
+            pass
+    if profile.is_set():
+        ctx["my_trading_plan"] = profile.for_ai()
+    return json.dumps(ctx, default=str)
 
 
 LOCAL_TZ = "America/Denver"
@@ -2459,6 +2513,8 @@ def screen_cld():
     if not login or login.done:
         if login and login.done and login.result:
             (st.error if "error" in login.result.lower() or "fail" in login.result.lower() else st.info)(login.result)
+        elif status.get("expired"):
+            st.warning("Your Claude sign-in has expired, so Ask AI couldn't answer. Sign in again below.")
         if st.button("Sign in with Claude", type="primary"):
             ss.claude_login = claude_code.Login()
             st.rerun()

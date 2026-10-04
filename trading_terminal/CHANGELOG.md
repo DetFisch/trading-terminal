@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.16 - 2026-10-03
+- Fixed: Ask AI could sit forever without replying when using your Claude subscription. It now sends a small summary of the screen (Claude looks up the rest with its tools) instead of first gathering every data set, which could take a minute or more. Prediction-market odds no longer hold up screens while they load.
+- While Claude works, Ask AI shows what it's looking up ("Looking up: get_quote ..."). If something goes wrong you get the reason within seconds, and a stuck answer is stopped after 10 minutes instead of hanging.
+- If your Claude sign-in has expired, Ask AI says so and Assistant > Connect Claude asks you to sign in again.
+- Each question writes `[claude] ...` lines to the Log tab (started, tools used, answered or the error) to help track down problems.
+
 ## 0.1.15 - 2026-10-02
 - **Claude now has 30 read-only research tools** when it answers through your subscription (Ask AI and the morning brief). It looks up what each question needs, for any asset class: quotes and history for stocks, ETFs, indexes, futures, forex and crypto; technicals; company profiles; 15 years of SEC financial statements; earnings; analyst views; valuation scores; news; insider trades; full SEC filing text; options chains with implied volatility, expected move and put/call ratios; ETF holdings and sector weights; a market overview (indexes, futures, yields, dollar, commodities, sectors); an S&P 500 screener; any FRED economic series (searchable); prediction-market odds; backtests; and your own portfolio, orders, journal, gains and trading plan. None of the tools can trade.
 - The tools run as an always-on service inside the add-on, so they're ready instantly.

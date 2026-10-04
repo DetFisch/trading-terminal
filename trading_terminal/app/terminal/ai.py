@@ -74,14 +74,14 @@ def _transcript(messages: list) -> str:
     return f"<earlier_conversation>\n{history}\n</earlier_conversation>\n\n{text(last['content'])}"
 
 
-def stream_answer(messages: list) -> Iterator[str]:
+def stream_answer(messages: list, on_tool=None) -> Iterator[str]:
     """Yields text as it arrives and appends the assistant turn(s) to `messages`."""
     who = provider()
     if who == "Claude Code":
         from . import claude_code
 
         parts = []
-        for chunk in claude_code.stream(_transcript(messages), SYSTEM + TOOLS_NOTE, effort="high"):
+        for chunk in claude_code.stream(_transcript(messages), SYSTEM + TOOLS_NOTE, effort="high", on_tool=on_tool):
             parts.append(chunk)
             yield chunk
         messages.append({"role": "assistant", "content": "".join(parts)})
@@ -195,6 +195,11 @@ def complete(prompt: str, system: str = "", max_tokens: int = 4000, effort: str 
 
 
 def error_text(e: Exception) -> str:
+    from . import claude_code
+
+    if isinstance(e, claude_code.SignInExpired):
+        return ("Your Claude sign-in has expired. Sign in again under Assistant > Connect Claude, then ask again. "
+                f"(Claude Code said: {e})")
     if isinstance(e, anthropic.AuthenticationError):
         return "Claude rejected the API key. Check ANTHROPIC_API_KEY in .env."
     if isinstance(e, anthropic.RateLimitError):

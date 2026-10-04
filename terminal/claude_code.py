@@ -161,36 +161,95 @@ def ask(prompt: str, system: str, timeout: int = 300, effort: str = "high", tool
     except (ValueError, json.JSONDecodeError):
         raise RuntimeError(f"Claude Code failed: {(p.stderr or p.stdout).strip()[:300]}")
     if data.get("is_error"):
-        raise RuntimeError(f"Claude Code: {data.get('result') or data.get('subtype')}")
+        msg = str(data.get("result") or data.get("subtype"))
+        if is_auth_error(msg):
+            mark_signed_out(msg)
+            raise SignInExpired(msg)
+        raise RuntimeError(f"Claude Code: {msg}")
     return data.get("result") or ""
 
 
-def stream(prompt: str, system: str, timeout: int = 900, effort: str = "high", tools: bool = True) -> Iterator[str]:
-    """Yields the answer as it is written (tool calls happen in between, so pauses are normal)."""
-    p = subprocess.Popen(_command(system, stream=True, effort=effort, tools=tools), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True, bufsize=1, env=_env(), cwd=_workdir())
-    p.stdin.write(prompt)
-    p.stdin.close()
-    started, wrote, final = time.time(), False, None
-    for line in p.stdout:
-        if time.time() - started > timeout:
+class SignInExpired(RuntimeError):
+    """The saved Claude sign-in no longer works (expired or revoked); sign in again under Connect Claude."""
+
+
+def is_auth_error(msg: str) -> bool:
+    m = msg.lower()
+    return any(w in m for w in ("authenticate", "oauth", "log in", "login", "not logged", "unauthorized", "401"))
+
+
+def mark_signed_out(reason: str) -> None:
+    """Stop using Claude until the user signs in again (`claude auth status` still reports an expired login)."""
+    global _status_cache
+    _status_cache = (time.time() + 3600 * 24 * 365, {"loggedIn": False, "expired": True, "error": reason})
+
+
+def _log(msg: str) -> None:
+    print(f"[claude] {msg}", file=sys.stderr, flush=True)  # shows in the add-on's Log tab
+
+
+def stream(prompt: str, system: str, timeout: int = 600, effort: str = "high", tools: bool = True,
+           on_tool=None) -> Iterator[str]:
+    """Yields the answer as it is written. Tool calls happen in between (pauses are normal); `on_tool(name)`
+    is called for each one. Stops with an error if nothing finishes within `timeout` seconds."""
+    p = subprocess.Popen(_command(system, stream=True, effort=effort, tools=tools), stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, env=_env(),
+                         cwd=_workdir())
+    started = time.time()
+    _log(f"question started (effort {effort}, tools {'on' if tools else 'off'}, {len(prompt):,} chars)")
+    # Read stderr continuously: if nobody drains it, its pipe can fill up and freeze the CLI.
+    errors: list[str] = []
+    threading.Thread(target=lambda: errors.extend(p.stderr), daemon=True).start()
+    # Watchdog: a hung CLI prints nothing, so a check inside the read loop would never run.
+    timer = threading.Timer(timeout, p.kill)
+    timer.start()
+    try:
+        p.stdin.write(prompt)
+        p.stdin.close()
+        wrote, final, tools_used = False, None, []
+        for line in p.stdout:
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kind = ev.get("type")
+            if kind == "system" and ev.get("subtype") == "init":
+                servers = {s.get("name"): s.get("status") for s in ev.get("mcp_servers") or []}
+                if tools and servers.get(MCP_NAME) != "connected":
+                    _log(f"research tools not available: {servers or 'no tool server configured'}")
+            elif kind == "assistant":
+                for b in (ev.get("message") or {}).get("content") or []:
+                    if b.get("type") == "tool_use":
+                        name = b.get("name", "").removeprefix(f"mcp__{MCP_NAME}__")
+                        tools_used.append(name)
+                        _log(f"tool: {name}")
+                        if on_tool:
+                            on_tool(name)
+            elif kind == "stream_event":
+                delta = (ev.get("event") or {}).get("delta") or {}
+                if delta.get("type") == "text_delta" and delta.get("text"):
+                    wrote = True
+                    yield delta["text"]
+            elif kind == "result":
+                final = ev
+        p.wait(timeout=30)
+    finally:
+        timer.cancel()
+        if p.poll() is None:
             p.kill()
-            raise RuntimeError("Claude Code took too long to answer")
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if ev.get("type") == "stream_event":
-            delta = (ev.get("event") or {}).get("delta") or {}
-            if delta.get("type") == "text_delta" and delta.get("text"):
-                wrote = True
-                yield delta["text"]
-        elif ev.get("type") == "result":
-            final = ev
-    p.wait(timeout=30)
+    took = time.time() - started
     if final is None:
-        raise RuntimeError(f"Claude Code failed: {p.stderr.read().strip()[:300]}")
+        why = "".join(errors).strip()[-400:] or ("no answer within the time limit" if took >= timeout - 1
+                                                 else f"exited with code {p.returncode}")
+        _log(f"failed after {took:.0f}s: {why}")
+        raise RuntimeError(f"Claude Code didn't answer: {why}")
     if final.get("is_error"):
-        raise RuntimeError(f"Claude Code: {final.get('result') or final.get('subtype')}")
+        msg = str(final.get("result") or final.get("subtype"))
+        _log(f"error after {took:.0f}s: {msg}")
+        if is_auth_error(msg):
+            mark_signed_out(msg)
+            raise SignInExpired(msg)
+        raise RuntimeError(f"Claude Code: {msg}")
+    _log(f"answered in {took:.0f}s using {len(tools_used)} tool calls")
     if not wrote and final.get("result"):
         yield final["result"]
