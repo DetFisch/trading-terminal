@@ -31,6 +31,10 @@ subprocess.Popen([sys.executable, "mcp_server.py", "--http", TOOLS_PORT])
 os.environ["TERMINAL_MCP_URL"] = f"http://127.0.0.1:{TOOLS_PORT}/mcp"
 
 port = os.getenv("PORT", "8501")
+if os.getenv("UI", "new").lower() != "classic":
+    # The fast web terminal (web/server.py). Home Assistant's ingress proxy handles the login in front of it.
+    os.environ["HOST"] = "0.0.0.0"
+    os.execvp(sys.executable, [sys.executable, "-m", "web.server"])
 os.execvp(sys.executable, [
     sys.executable, "-m", "streamlit", "run", "app.py",
     "--server.address=0.0.0.0", f"--server.port={port}", "--server.headless=true",

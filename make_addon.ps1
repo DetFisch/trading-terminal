@@ -8,5 +8,6 @@ New-Item -ItemType Directory -Path $dest | Out-Null
 Copy-Item (Join-Path $root "app.py"), (Join-Path $root "mcp_server.py"), (Join-Path $root "requirements.txt") $dest
 Copy-Item (Join-Path $root "terminal") $dest -Recurse
 Copy-Item (Join-Path $root ".streamlit") $dest -Recurse
+Copy-Item (Join-Path $root "web") $dest -Recurse
 Get-ChildItem $dest -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 Write-Host "Add-on code refreshed in trading_terminal\app. Commit and push, then press Update in Home Assistant."

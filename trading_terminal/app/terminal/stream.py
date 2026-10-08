@@ -10,6 +10,7 @@ connection would be refused by Alpaca ("connection limit exceeded").
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -85,6 +86,8 @@ def _state() -> _State | None:
 def start() -> None:
     with _start_lock:
         if _state() or not (config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY):
+            return
+        if os.getenv("STREAM", "on").strip().lower() == "off":  # a second copy (testing) would take the one stream
             return
         from alpaca.data.enums import DataFeed
         from alpaca.data.live import StockDataStream

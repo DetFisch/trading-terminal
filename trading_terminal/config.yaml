@@ -1,5 +1,5 @@
 name: Trading Terminal
-version: "0.1.16"
+version: "0.2.0"
 slug: trading_terminal
 description: Market data, research and paper/live trading through Alpaca and Interactive Brokers
 arch:
@@ -27,6 +27,8 @@ options:
   trading_mode: paper
   # auto = your Claude subscription if signed in (Assistant > Connect Claude), then an Anthropic API key, then Gemini
   ai_choice: auto
+  # new = the fast Bloomberg-style terminal; classic = the previous Streamlit screens (fallback)
+  ui: new
   watchlist: SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,JPM
   ibkr_enabled: false
   # The IB Gateway add-on from this repository (hostname shown on its Info tab). Leave ibkr_port
@@ -41,6 +43,7 @@ options:
 schema:
   trading_mode: list(paper|live)
   ai_choice: list(auto|claude_code|claude|gemini)
+  ui: list(new|classic)
   alpaca_paper_api_key: password?
   alpaca_paper_secret_key: password?
   alpaca_live_api_key: password?

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - 2026-10-07
+- **New terminal interface.** The slow Streamlit screens are replaced by a fast Bloomberg-style web app: function rail, command bar (type `NVDA GP`, `AAPL N`, `PORT`), dense panels and a live watchlist column. Every previous screen carries over, and prices update every few seconds.
+- **Phone friendly.** On a phone or the Home Assistant app it shows one panel at a time with bottom tabs (Home, Stock, Market, Trade, AI).
+- Faster: slow data is cached and refreshed in the background, the main screens are pre-loaded at start-up, and watchlist quotes come in one batch from Alpaca. Price alerts and earnings reminders are checked on the server even when no page is open.
+- Charts are drawn in the page itself (line, candles, SMA, Bollinger, RSI, MACD, volume, compare with SPY).
+- Option `ui`: `new` (default) or `classic` to go back to the previous screens if anything is missing.
+
 ## 0.1.16 - 2026-10-03
 - Fixed: Ask AI could sit forever without replying when using your Claude subscription. It now sends a small summary of the screen (Claude looks up the rest with its tools) instead of first gathering every data set, which could take a minute or more. Prediction-market odds no longer hold up screens while they load.
 - While Claude works, Ask AI shows what it's looking up ("Looking up: get_quote ..."). If something goes wrong you get the reason within seconds, and a stuck answer is stopped after 10 minutes instead of hanging.

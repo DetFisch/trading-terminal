@@ -168,6 +168,64 @@ def quote(symbol: str, live: dict | None = None) -> dict:
     }
 
 
+def alpaca_symbol(s: str) -> bool:
+    """US stocks and ETFs (Alpaca has them); indexes, futures, forex and crypto (^GSPC, ES=F, BTC-USD) don't."""
+    return bool(s) and s.replace(".", "").replace("-", "").isalpha() and len(s) <= 6 and not s.endswith("-USD")
+
+
+def daily_refs(symbols: list[str]) -> dict[str, dict]:
+    """Previous close and today's open/high/low/volume per US symbol, from one Alpaca request for all of them
+    (full-market daily bars, about 15 minutes behind on the free plan)."""
+    today = pd.Timestamp.now(tz="America/New_York").date()
+    out = {}
+    for s, df in market.bars([s for s in symbols if alpaca_symbol(s)], "5d", "1d").items():
+        if df.empty:
+            continue
+        is_today = df.index[-1].date() == today
+        prev = df["Close"].iloc[-2] if is_today and len(df) > 1 else df["Close"].iloc[-1]
+        bar = df.iloc[-1] if is_today else None
+        out[s] = {"prev_close": float(prev), "close": float(df["Close"].iloc[-1]),
+                  "open": float(bar["Open"]) if bar is not None else None,
+                  "day_high": float(bar["High"]) if bar is not None else None,
+                  "day_low": float(bar["Low"]) if bar is not None else None,
+                  "volume": float(bar["Volume"]) if bar is not None else None}
+    return out
+
+
+def fast_quotes(symbols: list[str], refs: dict | None = None) -> dict[str, dict]:
+    """Quotes for many symbols at once. US stocks and ETFs come from Alpaca in two requests in total (real-time
+    last price over the daily bars); everything else (indexes, futures, forex, crypto) from Yahoo, side by side.
+    Pass `refs` from daily_refs() to reuse them (they change slowly)."""
+    us = [s for s in symbols if alpaca_symbol(s)]
+    refs = daily_refs(us) if refs is None else refs
+    live = live_prices([s for s in us if s in refs])
+    out = {}
+    for s in us:
+        r = refs.get(s)
+        if not r:
+            continue
+        lv = live.get(s, {})
+        last = lv.get("last") or r["close"]
+        chg = last - r["prev_close"] if r["prev_close"] else None
+        out[s] = {"symbol": s, **r, "last": last, "bid": lv.get("bid"), "ask": lv.get("ask"), "change": chg,
+                  "change_pct": chg / r["prev_close"] * 100 if chg is not None else None,
+                  "source": lv.get("source", "Alpaca")}
+    rest = [s for s in symbols if s not in out]
+
+    def one(s):
+        try:
+            return quote(s, {})
+        except Exception:
+            return None
+
+    if rest:
+        with ThreadPoolExecutor(min(8, len(rest))) as pool:
+            for s, q in zip(rest, pool.map(one, rest)):
+                if q and q.get("last") is not None:
+                    out[s] = q
+    return out
+
+
 def quotes(symbols: list[str]) -> pd.DataFrame:
     live = live_prices(symbols)
 

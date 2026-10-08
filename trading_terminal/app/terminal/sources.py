@@ -38,6 +38,13 @@ def _cik_map() -> dict[str, int]:
     return {v["ticker"]: v["cik_str"] for v in rows.values()}
 
 
+@lru_cache(maxsize=1)
+def ticker_names() -> list[tuple[str, str]]:
+    """(ticker, company name) for every SEC-registered company, for the search box."""
+    rows = _get("https://www.sec.gov/files/company_tickers.json", headers=_sec_headers()).json()
+    return [(v["ticker"], v["title"]) for v in rows.values()]
+
+
 def sec_filings(symbol: str) -> pd.DataFrame:
     """Recent filings: date, form, description, 8-K item codes, link to the document."""
     cik = _cik_map().get(symbol.upper().replace(".", "-"))
