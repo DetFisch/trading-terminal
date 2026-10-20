@@ -2,6 +2,13 @@
 # (no Python), so that argument is deliberately not used.
 FROM python:3.12-slim-bookworm
 
+ARG BUILD_ARCH
+ARG BUILD_VERSION=0.2.2
+LABEL io.hass.type="app" \
+      io.hass.version="${BUILD_VERSION}" \
+      io.hass.arch="${BUILD_ARCH}"
+
+
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 DATA_DIR=/data \
     PATH=/root/.local/bin:$PATH DISABLE_AUTOUPDATER=1
 WORKDIR /app

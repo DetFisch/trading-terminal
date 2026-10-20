@@ -1,10 +1,24 @@
 [
   {
     "path": "ib_gateway",
-    "image": "ghcr.io/detfisch/trading-terminal-ib-gateway"
+    "image": "ghcr.io/detfisch/trading-terminal-ib-gateway",
+    "smoke": {
+      "entrypoint": "bash",
+      "args": [
+        "-ec",
+        "bash -n /addon_run.sh; test -x /addon_run.sh; test -x /home/ibgateway/scripts/run.sh; command -v jq; command -v setpriv"
+      ]
+    }
   },
   {
     "path": "trading_terminal",
-    "image": "ghcr.io/detfisch/trading-terminal"
+    "image": "ghcr.io/detfisch/trading-terminal",
+    "smoke": {
+      "entrypoint": "python",
+      "args": [
+        "-c",
+        "import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('/app').rglob('*.py')]; import starlette, uvicorn, streamlit, ib_async, anthropic, mcp"
+      ]
+    }
   }
 ]

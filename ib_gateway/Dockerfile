@@ -4,6 +4,13 @@
 # so that argument is deliberately not used.
 FROM ghcr.io/gnzsnz/ib-gateway:stable
 
+ARG BUILD_ARCH
+ARG BUILD_VERSION=0.1.6
+LABEL io.hass.type="app" \
+      io.hass.version="${BUILD_VERSION}" \
+      io.hass.arch="${BUILD_ARCH}"
+
+
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*
 COPY addon_run.sh /addon_run.sh

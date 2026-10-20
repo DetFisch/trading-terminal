@@ -87,10 +87,16 @@ Keys and passwords are entered in each add-on's **Configuration** tab in Home As
 never in this repository (`.env` is git-ignored).
 
 1. Settings > Add-ons > Add-on Store > ⋮ > **Repositories**, add
-   `https://github.com/j0eyoung/trading-terminal`, then close and refresh the store.
-2. Install **Trading Terminal** (the first build takes a while on a Green). On its
+   `https://github.com/DetFisch/trading-terminal`, then close and refresh the store.
+2. Install **Trading Terminal** (Home Assistant downloads a pre-built image). On its
    **Configuration** tab paste your keys, Save, **Start**, and turn on **Show in sidebar**.
-3. Optional, for Interactive Brokers: install **IB Gateway**. On its Configuration tab pick`n   `trading_mode` (paper, live, or both) and fill in the matching login: IBKR gives the paper`n   account its own username and password (`paper_username` / `paper_password`), separate from`n   the live one (`live_username` / `live_password`). Start it and approve the login on your phone`n   if IBKR asks. Then in Trading Terminal's Configuration turn `ibkr_enabled` on and set`n   `ibkr_host` to the **Hostname** on the IB Gateway add-on's Info tab (`e8950327-ib-gateway``n   when installed from this repository). Leave `ibkr_port` empty: it follows Trading Terminal's`n   `trading_mode` (4004 paper, 4003 live). Restart Trading Terminal.
+3. Optional, for Interactive Brokers: install **IB Gateway**. On its Configuration
+   tab pick `trading_mode` (paper, live, or both) and fill in the matching login.
+   IBKR gives the paper account its own username and password (`paper_username` /
+   `paper_password`), separate from the live login. Start it and approve the login
+   on your phone if IBKR asks. In Trading Terminal, enable `ibkr_enabled` and copy
+   `ibkr_host` from the **Hostname** on IB Gateway's Info tab. Leave `ibkr_port`
+   empty: it follows `trading_mode` (4004 paper, 4003 live). Restart Trading Terminal.
 4. Stop any other copy of the app while the Home Assistant one runs: the free Alpaca plan
    allows only one live price stream.
 
@@ -123,6 +129,8 @@ claude mcp add trading-terminal -- C:\AntiGravity\TradingApp\.venv\Scripts\pytho
 ```
 
 ## Pre-built Home Assistant images
+
+This DetFisch-maintained fork is based on [j0eyoung/trading-terminal](https://github.com/j0eyoung/trading-terminal).
 
 Home Assistant installs and updates this add-on from the container image declared
 in its configuration. It downloads the matching version for the host architecture
