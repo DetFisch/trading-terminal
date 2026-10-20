@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5 - 2026-10-20
+
+- Build and publish versioned container images in GitHub Actions for faster Home Assistant installations and updates.
+- Preserve release tags and build every architecture declared by the add-on.
+
 ## 0.1.4 - 2026-10-09
 - Added optional `twofa_device` to select the exact IBKR second-factor device when multiple methods are available. The value is passed to IBC through `TWOFA_DEVICE`; an empty value preserves the existing behavior. Phone approval is still required when requested by IBKR.
 

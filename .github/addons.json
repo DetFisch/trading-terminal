@@ -1,0 +1,10 @@
+[
+  {
+    "path": "ib_gateway",
+    "image": "ghcr.io/detfisch/trading-terminal-ib-gateway"
+  },
+  {
+    "path": "trading_terminal",
+    "image": "ghcr.io/detfisch/trading-terminal"
+  }
+]

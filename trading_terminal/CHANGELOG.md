@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 - 2026-10-20
+
+- Build and publish versioned container images in GitHub Actions for faster Home Assistant installations and updates.
+- Preserve release tags and build every architecture declared by the add-on.
+
 ## 0.2.0 - 2026-10-07
 - **New terminal interface.** The slow Streamlit screens are replaced by a fast Bloomberg-style web app: function rail, command bar (type `NVDA GP`, `AAPL N`, `PORT`), dense panels and a live watchlist column. Every previous screen carries over, and prices update every few seconds.
 - **Phone friendly.** On a phone or the Home Assistant app it shows one panel at a time with bottom tabs (Home, Stock, Market, Trade, AI).
