@@ -121,3 +121,13 @@ your portfolio) to Claude as read-only tools. It cannot place orders.
 ```bash
 claude mcp add trading-terminal -- C:\AntiGravity\TradingApp\.venv\Scripts\python.exe C:\AntiGravity\TradingApp\mcp_server.py
 ```
+
+## Pre-built Home Assistant images
+
+Home Assistant installs and updates this add-on from the container image declared
+in its configuration. It downloads the matching version for the host architecture
+instead of building the Dockerfile locally. GitHub Actions builds on every push
+to the default branch and publishes after all declared architectures pass.
+Existing release tags are kept; increase the add-on version for a new release.
+
+See [.github/ADDON_IMAGES.md](.github/ADDON_IMAGES.md) for the build and release workflow.
