@@ -6,6 +6,7 @@ FROM ghcr.io/gnzsnz/ib-gateway:stable
 
 ARG BUILD_ARCH
 ARG BUILD_VERSION=0.1.6
+LABEL org.opencontainers.image.version="${BUILD_VERSION}"
 LABEL io.hass.type="app" \
       io.hass.version="${BUILD_VERSION}" \
       io.hass.arch="${BUILD_ARCH}"
